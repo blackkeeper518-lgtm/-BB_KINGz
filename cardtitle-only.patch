@@ -1,0 +1,12 @@
+diff --git a/client/src/pages/OrderControl.tsx b/client/src/pages/OrderControl.tsx
+--- a/client/src/pages/OrderControl.tsx
++++ b/client/src/pages/OrderControl.tsx
+@@ -9,7 +9,7 @@
+ 
+ 
+ import { Badge } from "@/components/ui/badge";
+ import { Button } from "@/components/ui/button";
+-import { Card, CardContent, CardHeader } from "@/components/ui/card";
++import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+ import { Input } from "@/components/ui/input";
+ import { trpc } from "@/lib/trpc";
