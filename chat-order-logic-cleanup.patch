@@ -1,0 +1,588 @@
+[1mdiff --git a/client/src/App.tsx b/client/src/App.tsx[m
+[1mindex adedefa..0400ea4 100644[m
+[1m--- a/client/src/App.tsx[m
+[1m+++ b/client/src/App.tsx[m
+[36m@@ -7,7 +7,6 @@[m [mimport DashboardLayout from "./components/DashboardLayout";[m
+ import { ThemeProvider } from "./contexts/ThemeContext";[m
+ import OrderControl from "./pages/OrderControl";[m
+ import ChatHub from "./pages/ChatHub";[m
+[31m-import OrderPerformance from "./pages/OrderPerformance";[m
+ import StockRoom from "./pages/StockRoom";[m
+ import MappingDashboard from "./pages/MappingDashboard";[m
+ import OrderBuckets from "./pages/OrderBuckets";[m
+[36m@@ -42,7 +41,6 @@[m [mfunction Router() {[m
+     <Route path="/telegram-sent-history"><Shell><TelegramSentHistory /></Shell></Route>[m
+     <Route path="/alert-room"><Shell><AlertRoom /></Shell></Route>[m
+     <Route path="/blackbox"><Shell><BlackboxRoom /></Shell></Route>[m
+[31m-    <Route path="/order-performance"><Shell><OrderPerformance /></Shell></Route>[m
+     <Route path="/stock-room"><Shell><StockRoom /></Shell></Route>[m
+     <Route path="/system-manual"><Shell><SystemManual /></Shell></Route>[m
+     <Route path="/mapping-dashboard"><Shell><MappingDashboard /></Shell></Route>[m
+[1mdiff --git a/client/src/lib/canonical.ts b/client/src/lib/canonical.ts[m
+[1mindex b6defac..0c781d1 100644[m
+[1m--- a/client/src/lib/canonical.ts[m
+[1m+++ b/client/src/lib/canonical.ts[m
+[36m@@ -128,7 +128,19 @@[m [mconst ORDER_SOURCE_TABLE_BY_CAMP: Record<Camp, string> = { BB: "🗝️HERMES_AR[m
+ // Order screens load at most 1,000 rows per explicit refresh.[m
+ const ORDER_OPERATIONAL_LIMIT = 1000;[m
+ function defaultOrderView(camp: Camp) { return ORDER_SOURCE_TABLE_BY_CAMP[camp]; }[m
+[31m-function currentOrderWindowStart() { const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Bangkok", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date()); const values = Object.fromEntries(parts.filter(part => part.type !== "literal").map(part => [part.type, Number(part.value)])); return new Date(Date.UTC(values.year, values.month - 1, values.day - 1, 7, 0, 0)).toISOString(); }[m
+[32m+[m[32mexport const ORDER_CUTOFF_HOUR_BKK = 14;[m
+[32m+[m[32mfunction bangkokClock(now = new Date()) {[m
+[32m+[m[32m  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Bangkok", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(now);[m
+[32m+[m[32m  const values = Object.fromEntries(parts.filter(part => part.type !== "literal").map(part => [part.type, Number(part.value)]));[m
+[32m+[m[32m  return { year: values.year, month: values.month, day: values.day, hour: values.hour, minute: values.minute };[m
+[32m+[m[32m}[m
+[32m+[m[32mexport function currentBusinessDayStartKey(now = new Date()) {[m
+[32m+[m[32m  const clock = bangkokClock(now);[m
+[32m+[m[32m  const date = new Date(Date.UTC(clock.year, clock.month - 1, clock.day));[m
+[32m+[m[32m  if (clock.hour < ORDER_CUTOFF_HOUR_BKK) date.setUTCDate(date.getUTCDate() - 1);[m
+[32m+[m[32m  return Number(`${date.getUTCFullYear()}${String(date.getUTCMonth() + 1).padStart(2, "0")}${String(date.getUTCDate()).padStart(2, "0")}${String(ORDER_CUTOFF_HOUR_BKK).padStart(2, "0")}00`);[m
+[32m+[m[32m}[m
+[32m+[m[32mfunction currentOrderWindowStart() { const clock = bangkokClock(); const date = new Date(Date.UTC(clock.year, clock.month - 1, clock.day)); if (clock.hour < ORDER_CUTOFF_HOUR_BKK) date.setUTCDate(date.getUTCDate() - 1); return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 7, 0, 0)).toISOString(); }[m
+ function displayOrderSortKey(value: unknown): number {[m
+   const match = String(value ?? "").trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})\s+(\d{1,2}):(\d{2})/);[m
+   if (!match) return 0;[m
+[1mdiff --git a/client/src/lib/chat-to-canonical.ts b/client/src/lib/chat-to-canonical.ts[m
+[1mdeleted file mode 100644[m
+[1mindex 29b6cec..0000000[m
+[1m--- a/client/src/lib/chat-to-canonical.ts[m
+[1m+++ /dev/null[m
+[36m@@ -1,45 +0,0 @@[m
+[31m-import { getSupabase } from "./canonical";[m
+[31m-[m
+[31m-type AnyRow = Record<string, any>;[m
+[31m-export type ChatCanonicalResult = { orderId: string | number; upsertKey: string; orderNumber: string; itemCount: number; matchedCount: number; reviewCount: number; items: AnyRow[] };[m
+[31m-[m
+[31m-const norm = (v: unknown) => String(v ?? "").toLowerCase().normalize("NFKC").replace(/[\s_\-.,:;|()[\]{}]+/g, "").trim();[m
+[31m-const text = (v: unknown) => String(v ?? "").trim();[m
+[31m-const number = (v: unknown) => { const n = Number(String(v ?? "").replace(/,/g, "")); return Number.isFinite(n) ? n : null; };[m
+[31m-const splitValues = (v: unknown) => text(v).split(/[,\n|]+/).map(x => x.trim()).filter(Boolean);[m
+[31m-const thaiDate = (d = new Date()) => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Bangkok", year: "numeric", month: "2-digit", day: "2-digit" }).format(d).replace(/-/g, "");[m
+[31m-const safeKey = (v: string) => v.replace(/[^a-zA-Z0-9ก-๙_-]+/g, "").slice(0, 90) || "unknown";[m
+[31m-[m
+[31m-function parseCod(s: string) { const hits = s.match(/(?:ยอดรวม\s*)?cod\s*[:=]?\s*\[?\s*([\d,]+(?:\.\d+)?)|เก็บเงินปลายทาง[^\d]{0,20}([\d,]+(?:\.\d+)?)/gi) ?? []; const last = hits.at(-1) ?? ""; const m = last.match(/[\d,]+(?:\.\d+)?/); return m ? number(m[0]) : null; }[m
+[31m-function parsePhone(s: string) { const m = s.match(/(?:0\d{9,9})\b/g); return m?.at(-1) ?? ""; }[m
+[31m-function parseZip(s: string) { const m = s.match(/\b\d{5}\b/g); return m?.at(-1) ?? ""; }[m
+[31m-function parseAddress(s: string, zip: string) { const lines = s.split(/\r?\n/).map(x => x.trim()).filter(Boolean); const picked = lines.filter(x => /(?:ที่อยู่|จัดส่ง|ต\.|อ\.|จ\.|หมู่|ม\.|ถนน|ซอย|แขวง|ตำบล|อำเภอ|จังหวัด)/i.test(x)); const value = picked.join(" ") || lines.filter(x => !/cod|เบอร์|โทร|รายการสินค้า|ขนส่ง/i.test(x)).slice(-3).join(" "); return `${value}${zip && !value.includes(zip) ? ` ${zip}` : ""}`.trim(); }[m
+[31m-function parseName(s: string) { const labeled = s.match(/(?:ชื่อ(?:-นามสกุล)?|ผู้รับ)\s*[:：]?\s*([^\n📱📍📮]+)/i)?.[1]; return text(labeled).replace(/เบอร์.*$/i, "").trim(); }[m
+[31m-[m
+[31m-function makeAliasMap(rows: AnyRow[]) { const map = new Map<string, AnyRow>(); for (const row of rows) { const sku = text(row.sku); if (!sku) continue; for (const alias of [...splitValues(row.alias), ...splitValues(row.alias_text), ...splitValues(row.alias_norm), sku, text(row.product_name), text(row.th_name), text(row.label_display)].filter(Boolean)) map.set(norm(alias), row); } return map; }[m
+[31m-function extractSegments(s: string) { const re = /(?:^|\s)([🟢🟡🔴🟠🟣🔵🟩🟨🟥🟧🟪🟦🍉🥭🍎🍓🎯])\s*([^\n]*?)(?=\s+[🟢🟡🔴🟠🟣🔵🟩🟨🟥🟧🟪🟦🍉🥭🍎🍓🎯]|$)/g; const values: string[] = []; let match: RegExpExecArray | null; while ((match = re.exec(s))) values.push(text(match[2])); return values.filter(Boolean); }[m
+[31m-function quantityOf(raw: string) { const m = raw.match(/(?:x|×|จำนวน|qty)?\s*(\d+(?:\.\d+)?)\s*(?:คอต\.?|กล่อง|ซอง|ชิ้น|ชิ้นงาน)?\s*$/i) ?? raw.match(/(?:x|×|จำนวน|qty)\s*(\d+(?:\.\d+)?)/i); return number(m?.[1]) ?? 1; }[m
+[31m-function cleanProduct(raw: string) { return raw.replace(/(?:\d+(?:\.\d+)?\s*(?:คอต\.?|กล่อง|ซอง|ชิ้น)?\s*)$/i, "").trim(); }[m
+[31m-function matchItem(raw: string, aliases: Map<string, AnyRow>, masters: AnyRow[]) { const candidate = cleanProduct(raw); const candidateNorm = norm(candidate); const masterFields = (p: AnyRow) => [p.th_name, p.name_standard, p.product_name, p.display_for_packer, p.master_display_for_packer, p.brand, p.variant, p.sku].map(norm).filter(value => value.length >= 3); const masterMatches = masters.flatMap((p) => masterFields(p).filter(value => candidateNorm.includes(value) || value.includes(candidateNorm)).map(value => ({ p, value }))).sort((a, b) => b.value.length - a.value.length); const bestMaster = masterMatches[0]?.p; if (bestMaster) return { master: bestMaster, method: "PRODUCT_MASTER_THAI_OR_TEXT", confidence: 0.97 }; const direct = aliases.get(candidateNorm); if (direct) return { master: direct, method: "ALIAS_FALLBACK_EXACT", confidence: 0.82 }; const fuzzy = masters.find(p => masterFields(p).some(value => candidateNorm.includes(value) || value.includes(candidateNorm))); return fuzzy ? { master: fuzzy, method: "PRODUCT_MASTER_FALLBACK", confidence: 0.78 } : { master: null, method: "REVIEW", confidence: 0 };[m
+[31m-}[m
+[31m-[m
+[31m-export async function createCanonicalFromChat(input: { pageId: string; threadId: string; pageName?: string; customerName?: string }): Promise<ChatCanonicalResult> {[m
+[31m-  const api = getSupabase(); if (!api) throw new Error("ยังไม่ได้เชื่อม Supabase");[m
+[31m-  const [{ data: customers, error: ce }, { data: pages, error: pe }, { data: aliasRows, error: ae }, { data: masters, error: me }] = await Promise.all([[m
+[31m-    api.from("chat_customer_messages").select("*").eq("page_id", input.pageId).eq("conversation_key", input.threadId).order("occurred_at", { ascending: true }),[m
+[31m-    api.from("chat_page_messages").select("*").eq("page_id", input.pageId).eq("conversation_key", input.threadId).order("occurred_at", { ascending: true }),[m
+[31m-    api.from("product_map_master").select("*"),[m
+[31m-    api.from("🛒product_master").select("*")[m
+[31m-  ]);[m
+[31m-  if (ce) throw ce; if (pe) throw pe; if (ae) throw ae; if (me) throw me;[m
+[31m-  const rows: AnyRow[] = ([...(customers ?? []).map((r: AnyRow) => ({ ...r, actor: "customer" })), ...(pages ?? []).map((r: AnyRow) => ({ ...r, actor: "page" }))] as AnyRow[]).sort((a, b) => new Date(a.occurred_at ?? a.created_at ?? 0).getTime() - new Date(b.occurred_at ?? b.created_at ?? 0).getTime());[m
+[31m-  const fullText = rows.map(r => text(r.message_text ?? r.text)).filter(Boolean).join("\n");[m
+[31m-  const latest = rows.at(-1); const cod = parseCod(fullText); const phone = parsePhone(fullText); const zip = parseZip(fullText); const name = input.customerName || rows.find(r => r.customer_name)?.customer_name || parseName(fullText) || "ไม่ระบุชื่อ"; const address = parseAddress(fullText, zip); const aliases = makeAliasMap(aliasRows ?? []); const masterList = masters ?? [];[m
+[31m-  const rawSegments = extractSegments(fullText); const fallback = rawSegments.length ? rawSegments : (fullText.match(/(?:รายการสินค้า|สินค้า)\s*[:：]?\s*([^\n]+)/i)?.[1] ? [RegExp.$1] : []); const segments = fallback.length ? fallback : [];[m
+[31m-  const items = segments.map((raw, index) => { const qty = quantityOf(raw); const found = matchItem(raw, aliases, masterList); const p = found.master; return { line_no: index + 1, raw_product_text: raw, raw_item_text: raw, raw_product_text_norm: norm(cleanProduct(raw)), sku: text(p?.sku), product_id: p?.id ?? null, product_name: text(p?.product_name ?? p?.th_name ?? p?.label_display), th_name: text(p?.th_name ?? p?.product_name), label_display: text(p?.label_display ?? p?.display_for_packer ?? p?.name_standard), display_for_packer: text(p?.display_for_packer ?? p?.label_display ?? p?.product_name ?? raw), quantity: qty, extracted_qty: qty, unit_price: number(p?.unit_price ?? p?.price), expected_cod: p && number(p.unit_price ?? p.price) != null ? qty * Number(p.unit_price ?? p.price) : null, mapping_status: p ? "MATCHED" : "REVIEW", match_status: p ? "MATCHED" : "REVIEW", match_confidence: found.confidence, match_method: found.method, candidate_skus: p?.sku ? [{ sku: p.sku, confidence: found.confidence, method: found.method }] : [], source_payload_item: { raw_text: raw, alias_source: p?.sku ? "product_map_master/product_master" : "UNMATCHED" } }; });[m
+[31m-  const sourceText = fullText; const upsertKey = `chat_${safeKey(input.pageId)}_${safeKey(input.threadId)}`; const orderNumber = `CHAT-${thaiDate()}-${safeKey(input.threadId).slice(-10)}`; const now = new Date().toISOString();[m
+[31m-  const header: AnyRow = { upsert_key: upsertKey, order_number: orderNumber, order_time: latest?.occurred_at ?? now, page_id: input.pageId, page_name: input.pageName ?? latest?.page_name ?? "", thread_id: input.threadId, conversation_key: input.threadId, customer_name: name, phone, phone_norm: phone, full_address: address, address_display_primary: address, address_display_fallback: address, zipcode: zip, cod_amount: cod, expected_cod: cod, source_text: sourceText, raw_text_with_phone_timed: rows.map(r => `${r.occurred_at ?? now} [${r.actor === "page" ? "เพจ" : "ลูกค้า"}: ${text(r.message_text ?? r.text)}]`).join("\n"), source_payload: { source: "daily_chat_summary", page_id: input.pageId, thread_id: input.threadId, messages: rows }, order_status: "CHAT_EXTRACTED", view_status: "PENDING", history_status: "PENDING", created_at: now, updated_at: now };[m
+[31m-  const { data: saved, error: saveError } = await api.from("canonical_orders").upsert(header, { onConflict: "upsert_key" }).select("id").single(); if (saveError) throw saveError; const orderId = saved.id;[m
+[31m-  if (items.length) { const payload = items.map(item => ({ ...item, order_id: orderId, created_at: now, updated_at: now, ingested_at: now })); const { error: itemError } = await api.from("canonical_order_items").upsert(payload, { onConflict: "order_id,line_no" }); if (itemError) throw itemError; }[m
+[31m-  return { orderId, upsertKey, orderNumber, itemCount: items.length, matchedCount: items.filter(i => i.mapping_status === "MATCHED").length, reviewCount: items.filter(i => i.mapping_status !== "MATCHED").length, items };[m
+[31m-}[m
+[1mdiff --git a/client/src/lib/orderWarnings.ts b/client/src/lib/orderWarnings.ts[m
+[1mindex def883e..42a8fa6 100644[m
+[1m--- a/client/src/lib/orderWarnings.ts[m
+[1m+++ b/client/src/lib/orderWarnings.ts[m
+[36m@@ -5,78 +5,7 @@[m [mexport type OrderWarning = {[m
+   message: string;[m
+ };[m
+ [m
+[31m-type OrderRow = Record<string, unknown>;[m
+[31m-[m
+[31m-const RESTRICTED_PROVINCES: Array<{ name: string; prefix: string }> = [[m
+[31m-  { name: "นครราชสีมา", prefix: "30" },[m
+[31m-  { name: "บุรีรัมย์", prefix: "31" },[m
+[31m-  { name: "สุรินทร์", prefix: "32" },[m
+[31m-  { name: "ศรีสะเกษ", prefix: "33" },[m
+[31m-  { name: "อุบลราชธานี", prefix: "34" },[m
+[31m-  { name: "ยโสธร", prefix: "35" },[m
+[31m-  { name: "ชัยภูมิ", prefix: "36" },[m
+[31m-  { name: "อำนาจเจริญ", prefix: "37" },[m
+[31m-  { name: "บึงกาฬ", prefix: "38" },[m
+[31m-  { name: "หนองบัวลำภู", prefix: "39" },[m
+[31m-  { name: "ขอนแก่น", prefix: "40" },[m
+[31m-  { name: "อุดรธานี", prefix: "41" },[m
+[31m-  { name: "เลย", prefix: "42" },[m
+[31m-  { name: "หนองคาย", prefix: "43" },[m
+[31m-  { name: "มหาสารคาม", prefix: "44" },[m
+[31m-  { name: "ร้อยเอ็ด", prefix: "45" },[m
+[31m-  { name: "กาฬสินธุ์", prefix: "46" },[m
+[31m-  { name: "สกลนคร", prefix: "47" },[m
+[31m-  { name: "นครพนม", prefix: "48" },[m
+[31m-  { name: "มุกดาหาร", prefix: "49" },[m
+[31m-];[m
+[31m-[m
+[31m-function text(value: unknown): string {[m
+[31m-  if (value == null) return "";[m
+[31m-  if (typeof value === "string") return value.trim();[m
+[31m-  if (Array.isArray(value)) return value.map(text).filter(Boolean).join(" ");[m
+[31m-  return String(value).trim();[m
+[31m-}[m
+[31m-[m
+[31m-function firstText(row: OrderRow, keys: string[]): string {[m
+[31m-  for (const key of keys) {[m
+[31m-    const value = text(row[key]);[m
+[31m-    if (value) return value;[m
+[31m-  }[m
+[31m-  return "";[m
+[31m-}[m
+[31m-[m
+[31m-function enabled(value: unknown): boolean {[m
+[31m-  return value === true || value === 1 || ["true", "t", "1", "yes", "ใช่"].includes(text(value).toLowerCase());[m
+[31m-}[m
+[31m-[m
+[31m-function postalCodeFrom(address: string): string {[m
+[31m-  return address.match(/(?:^|\D)(\d{5})(?!\d)/)?.[1] ?? "";[m
+[31m-}[m
+[31m-[m
+[31m-/** The UI only surfaces the source-backed restricted-area signal. */[m
+[31m-export function getOrderWarnings(value: unknown): OrderWarning[] {[m
+[31m-  if (!value || typeof value !== "object" || Array.isArray(value)) return [];[m
+[31m-  const row = value as OrderRow;[m
+[31m-  const address = firstText(row, [[m
+[31m-    "address_fibo_selected_clean", "telegram_primary_address", "final_address_for_bill",[m
+[31m-    "address_display_packer", "rescue_address_normalized", "full_address", "addressclean",[m
+[31m-    "finalAddress", "short_address", "address",[m
+[31m-  ]);[m
+[31m-  const zipcode = firstText(row, ["zipcode", "zip_code", "postal_code", "postcode", "postal"]);[m
+[31m-  const postal = zipcode.match(/\d{5}/)?.[0] ?? postalCodeFrom(address);[m
+[31m-  const province = firstText(row, ["province", "master_province", "shipping_province"]);[m
+[31m-  const locationText = `${province} ${address}`.replace(/\s+/g, "");[m
+[31m-  const matchedProvince = RESTRICTED_PROVINCES.find(({ name }) => locationText.includes(name));[m
+[31m-  const matchedPrefix = RESTRICTED_PROVINCES.find(({ prefix }) => prefix === postal.match(/^\d{2}/)?.[0]);[m
+[31m-  const auditText = [row.warning_tag, row.audit_flags, row.auditFlags].map(text).join(" ");[m
+[31m-  const sourceMarksRisk = enabled(row.high_risk_area) || enabled(row.risk_area) ||[m
+[31m-    /พื้นที่เสี่ยงสูง|RISK\s*AREA|ของโดนขโมย|งดส่งพื้นที่/i.test(auditText);[m
+[31m-[m
+[31m-  if (!matchedProvince && !matchedPrefix && !sourceMarksRisk) return [];[m
+[31m-  const place = matchedProvince?.name ?? matchedPrefix?.name ?? province;[m
+[31m-  return [{[m
+[31m-    code: "RESTRICTED_AREA",[m
+[31m-    severity: "BLOCK",[m
+[31m-    message: `งดส่ง/พื้นที่เสี่ยง${place ? ` · ${place}` : ""}`,[m
+[31m-  }];[m
+[32m+[m[32m/** @deprecated Risk decisions belong to the n8n order flow, not the browser. */[m
+[32m+[m[32mexport function getOrderWarnings(_value: unknown): OrderWarning[] {[m
+[32m+[m[32m  return [];[m
+ }[m
+[1mdiff --git a/client/src/pages/ChatHub.tsx b/client/src/pages/ChatHub.tsx[m
+[1mindex 1ca2ea8..7476f96 100644[m
+[1m--- a/client/src/pages/ChatHub.tsx[m
+[1m+++ b/client/src/pages/ChatHub.tsx[m
+[36m@@ -89,9 +89,6 @@[m [mexport default function ChatHub() {[m
+   const [deliveryStatus, setDeliveryStatus] = useState<"idle" | "sending" | "sent" | "failed">("idle");[m
+   const [replyNotice, setReplyNotice] = useState("");[m
+   const fileInputRef = useRef<HTMLInputElement>(null);[m
+[31m-  const [summaryOpen, setSummaryOpen] = useState(false);[m
+[31m-  const [summaryText, setSummaryText] = useState("");[m
+[31m-  const [summary, setSummary] = useState<{ orderNumber: string; customerName: string; phone: string; address: string; product: string; cod: string; copyText: string; unitPrice?: number | null; timingMs?: { total: number; parse: number; dataLookup: number; audit: number } } | null>(null);[m
+   const [messageFilter, setMessageFilter] = useState<"all" | "customer" | "page">("all");[m
+   const [copied, setCopied] = useState(false);[m
+   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);[m
+[36m@@ -187,21 +184,10 @@[m [mexport default function ChatHub() {[m
+     },[m
+     onError: error => { setDeliveryStatus("failed"); setReplyNotice(error.message || "ส่งข้อความไม่สำเร็จ"); },[m
+   });[m
+[31m-  const generateSummary = trpc.orders.generateSummary.useMutation({ onSuccess: result => { setSummary(result); setSummaryText(""); setReplyText(result.copyText); } });[m
+[31m-  const summaryTimingsQuery = trpc.orders.summaryTimings.useQuery({ limit: 8 }, { enabled: summaryOpen, refetchInterval: false });[m
+   const metaErrorsQuery = trpc.chat.metaErrors.useQuery(undefined, { refetchInterval: 60_000 });[m
+   const confirmationsQuery = trpc.orders.confirmations.useQuery(undefined, { refetchInterval: 30_000 });[m
+   const confirmOrder = trpc.orders.confirmFromChat.useMutation({ onSuccess: () => confirmationsQuery.refetch() });[m
+   const confirmedKeys = new Set((confirmationsQuery.data ?? []).map(row => `${row.pageId}:${row.threadId}`));[m
+[31m-  const openOrderSummary = () => {[m
+[31m-    if (!selected) return;[m
+[31m-    const linkedSource = selected.orders?.find((order: any) => order.source_text)?.source_text[m
+[31m-      || selected.orders?.find((order: any) => order.source_payload?.source_text)?.source_payload?.source_text;[m
+[31m-    const seed = linkedSource || selected.chatTimeline?.join("\n") || selected.preview || "";[m
+[31m-    setSummary(null);[m
+[31m-    setSummaryText(seed);[m
+[31m-    setSummaryOpen(true);[m
+[31m-  };[m
+   const selectedConfirmed = Boolean(selected && confirmedKeys.has(`${selectedPageId}:${selectedThreadId}`));[m
+   const confirmSelectedOrder = () => { if (!selectedPageId || !selectedThreadId || selectedConfirmed) return; confirmOrder.mutate({ pageId: selectedPageId, threadId: selectedThreadId, customerName: selected?.customerName ?? undefined, customerId: selectedCustomerId || undefined, evidenceText: selected?.preview ?? undefined }); };[m
+ [m
+[36m@@ -286,14 +272,14 @@[m [mexport default function ChatHub() {[m
+   </div>;[m
+ [m
+   const conversation = selected ? <div className="chat-cosmos-conversation flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">[m
+[31m-    <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-cyan-300/15 bg-gradient-to-r from-cyan-400/[0.035] via-transparent to-fuchsia-500/[0.06] px-4 py-3 sm:px-5"><div className="flex min-w-0 items-center gap-3"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-cyan-300/20 bg-gradient-to-br from-cyan-400/20 via-violet-500/20 to-fuchsia-500/25 text-cyan-100 shadow-[0_0_18px_rgba(34,211,238,.12)]"><CircleUserRound className="h-5 w-5" /></div><div className="min-w-0"><div className="mb-1 flex flex-wrap items-center gap-1.5"><span className="rounded-md border border-fuchsia-300/25 bg-fuchsia-400/[0.08] px-1.5 py-0.5 font-mono text-[9px] font-semibold text-fuchsia-200">ROOM · {selected.pageId ? selected.pageId.slice(-4) : "BB"}</span><span className="truncate text-[10px] text-cyan-200/70">{selected.pageName || "ไม่ระบุเพจ"}</span></div><h2 className="truncate text-base font-semibold text-white">{selected.customerName || "ลูกค้าใหม่"}</h2><div className="mt-1 flex items-center gap-2 text-xs text-cyan-100/55"><span className="truncate">{selected.pageName}</span><span>·</span><span>{timeLabel(selected.latestAt)}</span></div></div></div><div className="flex max-w-full flex-wrap items-center justify-end gap-2"><Badge className="hidden border border-emerald-400/25 bg-emerald-400/10 text-emerald-300 sm:inline-flex">● ONLINE</Badge><Button size="sm" variant="outline" onClick={confirmSelectedOrder} disabled={selectedConfirmed || confirmOrder.isPending} className="rounded-xl border-violet-300/25 bg-violet-400/[0.08] text-xs text-violet-100 hover:border-fuchsia-300/45 hover:bg-fuchsia-400/15">{selectedConfirmed ? <><CheckCircle2 className="mr-1 h-3.5 w-3.5" />ยืนยันแล้ว</> : confirmOrder.isPending ? "กำลังบันทึก…" : "ยืนยันเป็นออเดอร์"}</Button><Button size="sm" variant="outline" onClick={() => setOrderDetailOpen(true)} className="rounded-xl border-cyan-300/30 bg-cyan-400/[0.08] text-xs text-cyan-100 shadow-[0_0_14px_rgba(34,211,238,.08)] hover:bg-cyan-400/15" title="นับข้อความที่มีคำว่า COD ในข้อมูลแชทที่โหลด">COD ({selected.codSignalCount ?? 0})</Button><Button size="sm" onClick={openOrderSummary} className="rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 text-xs shadow-[0_0_16px_rgba(217,70,239,.18)] hover:brightness-110">สรุปออเดอร์</Button>{isMobile ? <button onClick={() => setMobileOpen(false)} className="rounded-xl p-2 text-fuchsia-100/55 hover:bg-fuchsia-500/10 hover:text-white" aria-label="ปิดห้องแชท"><X className="h-5 w-5" /></button> : null}</div></div>[m
+[32m+[m[32m    <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-cyan-300/15 bg-gradient-to-r from-cyan-400/[0.035] via-transparent to-fuchsia-500/[0.06] px-4 py-3 sm:px-5"><div className="flex min-w-0 items-center gap-3"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-cyan-300/20 bg-gradient-to-br from-cyan-400/20 via-violet-500/20 to-fuchsia-500/25 text-cyan-100 shadow-[0_0_18px_rgba(34,211,238,.12)]"><CircleUserRound className="h-5 w-5" /></div><div className="min-w-0"><div className="mb-1 flex flex-wrap items-center gap-1.5"><span className="rounded-md border border-fuchsia-300/25 bg-fuchsia-400/[0.08] px-1.5 py-0.5 font-mono text-[9px] font-semibold text-fuchsia-200">ROOM · {selected.pageId ? selected.pageId.slice(-4) : "BB"}</span><span className="truncate text-[10px] text-cyan-200/70">{selected.pageName || "ไม่ระบุเพจ"}</span></div><h2 className="truncate text-base font-semibold text-white">{selected.customerName || "ลูกค้าใหม่"}</h2><div className="mt-1 flex items-center gap-2 text-xs text-cyan-100/55"><span className="truncate">{selected.pageName}</span><span>·</span><span>{timeLabel(selected.latestAt)}</span></div></div></div><div className="flex max-w-full flex-wrap items-center justify-end gap-2"><Badge className="hidden border border-emerald-400/25 bg-emerald-400/10 text-emerald-300 sm:inline-flex">● ONLINE</Badge><Button size="sm" variant="outline" onClick={confirmSelectedOrder} disabled={selectedConfirmed || confirmOrder.isPending} className="rounded-xl border-violet-300/25 bg-violet-400/[0.08] text-xs text-violet-100 hover:border-fuchsia-300/45 hover:bg-fuchsia-400/15">{selectedConfirmed ? <><CheckCircle2 className="mr-1 h-3.5 w-3.5" />ยืนยันแล้ว</> : confirmOrder.isPending ? "กำลังบันทึก…" : "ยืนยันเป็นออเดอร์"}</Button><Button size="sm" variant="outline" onClick={() => setOrderDetailOpen(true)} className="rounded-xl border-cyan-300/30 bg-cyan-400/[0.08] text-xs text-cyan-100 shadow-[0_0_14px_rgba(34,211,238,.08)] hover:bg-cyan-400/15" title="นับข้อความที่มีคำว่า COD ในข้อมูลแชทที่โหลด">COD ({selected.codSignalCount ?? 0})</Button>{isMobile ? <button onClick={() => setMobileOpen(false)} className="rounded-xl p-2 text-fuchsia-100/55 hover:bg-fuchsia-500/10 hover:text-white" aria-label="ปิดห้องแชท"><X className="h-5 w-5" /></button> : null}</div></div>[m
+     <div ref={chatTimelineRef} onScroll={handleTimelineScroll} className="chat-cosmos-timeline relative min-h-0 flex-1 flex flex-col justify-start gap-3 overflow-y-auto overscroll-contain bg-[radial-gradient(circle_at_82%_8%,rgba(16,185,129,0.12),transparent_28%),radial-gradient(circle_at_12%_74%,rgba(168,85,247,0.11),transparent_30%),linear-gradient(135deg,#080c15,#0d0914_56%,#090b12)] p-4 sm:p-5 [-webkit-overflow-scrolling:touch]">[m
+       {showNewMessages ? <button type="button" onClick={jumpToLatest} className="sticky bottom-3 left-1/2 z-20 mx-auto -mb-10 rounded-full border border-fuchsia-300/30 bg-gradient-to-r from-fuchsia-600 via-violet-600 to-emerald-500 px-4 py-2 text-xs font-semibold text-white shadow-[0_0_24px_rgba(168,85,247,0.45)] transition hover:scale-105">ข้อความใหม่ · ลงล่างสุด</button> : null}[m
+       {messagesQuery.isFetching ? <div className="absolute right-4 top-4 z-10 inline-flex items-center gap-1.5 rounded-full border border-fuchsia-400/20 bg-[#15101d]/90 px-2.5 py-1 text-[10px] text-fuchsia-200"><LoaderCircle className="h-3 w-3 animate-spin" />กำลังอัปเดต</div> : null}[m
+       {visibleStoredMessages.length === 0 ? <>{visibleTimeline.length ? visibleTimeline.map((line: string, index: number) => <div key={`${line}-${index}`} className={`chat-message-bubble min-w-0 shrink-0 break-words [overflow-wrap:anywhere] rounded-2xl px-4 py-3 text-sm leading-6 shadow-lg ${isPageTimelineLine(line) ? "ml-auto rounded-br-md border border-fuchsia-300/25 bg-gradient-to-br from-violet-900/80 to-fuchsia-950/65 text-fuchsia-50 shadow-[0_0_20px_rgba(217,70,239,.10)]" : "rounded-bl-md border border-emerald-300/25 bg-gradient-to-br from-emerald-950/85 to-green-950/55 text-emerald-50/95 shadow-[0_0_18px_rgba(16,185,129,.12)]"}`}><p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{stripSpeakerPrefix(line)}</p></div>) : <div className="rounded-2xl border border-fuchsia-500/10 bg-black/20 p-4 text-sm leading-6 text-fuchsia-100/60"><p>{selected.preview}</p></div>}<p className="text-[11px] text-fuchsia-100/30">แชทจากตารางกลาง · n8n API รอบถัดไปจะอัปเดตเข้าห้องนี้อัตโนมัติ</p></> : null}[m
+       {visibleStoredMessages.map(message => { const isRight = ("side" in message && message.side === "right") || message.direction === "outbound" || message.senderType === "page"; const senderName = isRight ? (selected.pageName || "เพจ") : (selected.customerName || "ลูกค้า"); return <div key={message.id} className={`flex w-full shrink-0 ${isRight ? "justify-end" : "justify-start"}`}><div className={`chat-message-bubble min-w-0 shrink-0 break-words [overflow-wrap:anywhere] rounded-2xl px-4 py-3 text-sm leading-6 shadow-lg ${isRight ? "rounded-br-md border border-fuchsia-300/25 bg-gradient-to-br from-violet-900/80 to-fuchsia-950/65 text-fuchsia-50 shadow-[0_0_20px_rgba(217,70,239,.10)]" : "rounded-bl-md border border-emerald-300/25 bg-gradient-to-br from-emerald-950/85 to-green-950/55 text-emerald-50/95 shadow-[0_0_18px_rgba(16,185,129,.12)]"}`}><p className="mb-1 text-[10px] font-semibold uppercase tracking-wide opacity-60">{senderName}</p><p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{stripSpeakerPrefix(message.text || "ส่งรูปภาพ")}</p>{imageUrls(message.attachmentsJson).map(url => <button key={url} type="button" onClick={() => setLightboxUrl(url)} className="mt-2 block cursor-zoom-in text-left"><img src={url} alt="ไฟล์แนบจากแชท คลิกเพื่อขยาย" className="max-h-56 rounded-xl object-cover transition hover:brightness-110" /></button>)}<p className="mt-1 text-[10px] opacity-50">{senderName} · {timeLabel(String(message.occurredAt))}</p></div></div>; })}[m
+     </div>[m
+[31m-    <div className={`chat-cosmos-composer mt-auto flex shrink-0 flex-col overflow-hidden border-t border-cyan-300/20 bg-gradient-to-b from-[#111326] to-[#090c14] p-3 shadow-[0_-8px_28px_rgba(34,211,238,.05)] sm:p-4 transition-[height] duration-300 ${composerOpen ? "h-[270px] min-h-[270px]" : "h-12 min-h-12"}`}><div className="mb-2 flex shrink-0 items-center justify-between border-b border-fuchsia-500/10 pb-2"><span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-fuchsia-100/45">กล่องตอบแชท</span>{replyNotice ? <span className={`max-w-[65%] truncate text-[10px] ${deliveryStatus === "sent" ? "text-emerald-300" : deliveryStatus === "failed" ? "text-rose-300" : "text-cyan-200"}`}>{replyNotice}</span> : null}<button type="button" onClick={() => setComposerOpen(value => !value)} className="flex h-7 w-7 items-center justify-center rounded-lg border border-fuchsia-400/20 bg-fuchsia-400/[0.06] text-fuchsia-200 transition hover:bg-fuchsia-400/15" title={composerOpen ? "หุบกล่องตอบแชท" : "เปิดกล่องตอบแชท"} aria-label={composerOpen ? "หุบกล่องตอบแชท" : "เปิดกล่องตอบแชท"}><ChevronDown className={`h-4 w-4 transition-transform ${composerOpen ? "rotate-0" : "rotate-180"}`} /></button></div><div className={`min-h-0 flex-1 overflow-hidden ${composerOpen ? "" : "pointer-events-none opacity-0"}`}><div className="mb-3 flex shrink-0 flex-wrap items-center gap-1.5"><span className="mr-1 text-[10px] uppercase tracking-wider text-fuchsia-100/35">ดูข้อความ</span>{([ ["all", "ทั้งหมด"], ["customer", "ลูกค้า"], ["page", "เพจ"] ] as const).map(([value, label]) => <button key={value} onClick={() => setMessageFilter(value)} className={`rounded-lg px-2.5 py-1 text-[10px] transition ${messageFilter === value ? "bg-fuchsia-500/20 text-fuchsia-200 ring-1 ring-fuchsia-400/30" : "text-fuchsia-100/45 hover:bg-fuchsia-500/10 hover:text-fuchsia-100"}`}>{label}</button>)}</div>{summary ? <div className="mb-3 hidden shrink-0 rounded-2xl border border-fuchsia-400/20 bg-fuchsia-500/[0.06] p-3"><div className="flex items-center justify-between gap-3"><p className="text-xs font-semibold text-fuchsia-200">พรีวิวใบสรุป · {summary.orderNumber}</p><button onClick={() => setSummary(null)} className="text-[10px] text-fuchsia-100/40 hover:text-white">ล้าง</button></div><p className="mt-1 text-[11px] text-fuchsia-100/45">ตรวจข้อความด้านล่างให้ถูกต้องก่อนกดส่งให้ลูกค้า</p><Button variant="outline" size="sm" onClick={copySummary} className="mt-2 h-7 border-fuchsia-400/20 bg-transparent text-[10px] text-fuchsia-200">{copied ? <Check className="mr-1 h-3 w-3" /> : <Clipboard className="mr-1 h-3 w-3" />}{copied ? "คัดลอกแล้ว" : "คัดลอกข้อความสรุป"}</Button></div> : null}{composer}</div></div>[m
+[32m+[m[32m    <div className={`chat-cosmos-composer mt-auto flex shrink-0 flex-col overflow-hidden border-t border-cyan-300/20 bg-gradient-to-b from-[#111326] to-[#090c14] p-3 shadow-[0_-8px_28px_rgba(34,211,238,.05)] sm:p-4 transition-[height] duration-300 ${composerOpen ? "h-[270px] min-h-[270px]" : "h-12 min-h-12"}`}><div className="mb-2 flex shrink-0 items-center justify-between border-b border-fuchsia-500/10 pb-2"><span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-fuchsia-100/45">กล่องตอบแชท</span>{replyNotice ? <span className={`max-w-[65%] truncate text-[10px] ${deliveryStatus === "sent" ? "text-emerald-300" : deliveryStatus === "failed" ? "text-rose-300" : "text-cyan-200"}`}>{replyNotice}</span> : null}<button type="button" onClick={() => setComposerOpen(value => !value)} className="flex h-7 w-7 items-center justify-center rounded-lg border border-fuchsia-400/20 bg-fuchsia-400/[0.06] text-fuchsia-200 transition hover:bg-fuchsia-400/15" title={composerOpen ? "หุบกล่องตอบแชท" : "เปิดกล่องตอบแชท"} aria-label={composerOpen ? "หุบกล่องตอบแชท" : "เปิดกล่องตอบแชท"}><ChevronDown className={`h-4 w-4 transition-transform ${composerOpen ? "rotate-0" : "rotate-180"}`} /></button></div><div className={`min-h-0 flex-1 overflow-hidden ${composerOpen ? "" : "pointer-events-none opacity-0"}`}><div className="mb-3 flex shrink-0 flex-wrap items-center gap-1.5"><span className="mr-1 text-[10px] uppercase tracking-wider text-fuchsia-100/35">ดูข้อความ</span>{([ ["all", "ทั้งหมด"], ["customer", "ลูกค้า"], ["page", "เพจ"] ] as const).map(([value, label]) => <button key={value} onClick={() => setMessageFilter(value)} className={`rounded-lg px-2.5 py-1 text-[10px] transition ${messageFilter === value ? "bg-fuchsia-500/20 text-fuchsia-200 ring-1 ring-fuchsia-400/30" : "text-fuchsia-100/45 hover:bg-fuchsia-500/10 hover:text-fuchsia-100"}`}>{label}</button>)}</div>{composer}</div></div>[m
+   </div> : <div className="flex min-h-[560px] items-center justify-center text-sm text-fuchsia-100/35">เลือกห้องแชทเพื่อเริ่มดูข้อความ</div>;[m
+ [m
+   return <div className="chat-cosmos-shell cosmic-stage h-full min-h-0 overflow-hidden bg-[radial-gradient(ellipse_at_top_left,rgba(34,211,238,0.11),transparent_38%),radial-gradient(ellipse_at_bottom_right,rgba(168,85,247,0.10),transparent_40%),#070912] text-white"><div className="mx-auto flex h-full min-h-0 max-w-[1600px] flex-col gap-3 overflow-hidden p-2 sm:p-4 lg:p-6">[m
+[36m@@ -308,8 +294,6 @@[m [mexport default function ChatHub() {[m
+       {!toolsOpen ? <button type="button" onClick={() => setToolsOpen(true)} aria-label="เปิดแผงเครื่องมือ" className="absolute right-2 top-2 z-30 rounded-xl border border-cyan-300/30 bg-[#0b1520]/95 px-3 py-2 text-xs font-semibold text-cyan-100 shadow-[0_0_16px_rgba(34,211,238,.18)] transition hover:border-fuchsia-300/50 hover:text-white">เปิดเครื่องมือ</button> : null}[m
+       <Card className={`chat-cosmos-tools relative flex min-h-0 shrink-0 flex-col overflow-hidden rounded-3xl border-cyan-300/20 bg-gradient-to-b from-[#0d1721] to-[#0b0d17] shadow-[0_8px_36px_rgba(34,211,238,.11)] backdrop-blur-xl transition-[width] duration-300 ${toolsOpen ? "" : "pointer-events-none"}`} style={{ width: toolsOpen ? `${toolsWidth}px` : "0px" }}><CardHeader className="shrink-0 border-b border-cyan-300/10 pb-3"><div className="flex items-center justify-between gap-2"><div><CardTitle className="text-sm text-cyan-100">เครื่องมือห้องนี้</CardTitle><p className="mt-1 text-[10px] text-cyan-100/40">สำรอง · เสียบข้อความเข้ากล่องแชท</p></div><label className="flex items-center gap-1 text-[9px] text-cyan-100/40" title="ปรับความกว้างแผง"><span>↔</span><input type="range" min="280" max="520" step="20" value={toolsWidth} onChange={event => setToolsWidth(Number(event.target.value))} className="w-16 accent-cyan-400" /></label><button type="button" onClick={() => setToolsOpen(false)} className="rounded-lg p-1.5 text-cyan-100/45 hover:bg-cyan-300/10 hover:text-cyan-100" aria-label="หุบแผงเครื่องมือ"><X className="h-4 w-4" /></button></div></CardHeader><CardContent className="min-h-0 space-y-3 overflow-y-auto p-3">{selected ? <><div className="rounded-xl border border-cyan-300/10 bg-cyan-300/[0.04] p-3"><p className="truncate text-sm font-semibold text-cyan-100">{selected.customerName || "ลูกค้าใหม่"}</p><p className="mt-1 truncate text-[10px] text-cyan-100/45">{selected.pageName || "ไม่ระบุเพจ"}</p></div>{selectedTrackingRows.length ? selectedTrackingRows.map((row, index) => <div key={`${row.tracking_number}-${index}`} className="rounded-xl border border-emerald-300/15 bg-emerald-300/[0.04] p-3"><div className="flex items-center justify-between gap-2"><p className="font-mono text-sm font-bold text-emerald-100">{row.tracking_number || "ไม่มีเลข"}</p><span className="text-[10px] text-emerald-200/65">สำรอง</span></div><p className="mt-1 truncate text-[10px] text-cyan-100/45">{row.order_number_display || row.order_number || "ไม่พบออเดอร์"} · {row.shipping_carrier || "FLASH EXPRESS"}</p><div className="mt-3 grid gap-2"><Button type="button" size="sm" onClick={() => setReplyText(String(row.facebook_tracking_message || ""))} disabled={!row.facebook_tracking_message} className="h-8 justify-start bg-emerald-500/15 text-[10px] text-emerald-100 hover:bg-emerald-500/25">เสียบ Facebook ลงกล่อง</Button><Button type="button" size="sm" variant="outline" onClick={() => setReplyText(String(row.drakside_tracking_message || ""))} disabled={!row.drakside_tracking_message} className="h-8 justify-start border-cyan-300/20 text-[10px] text-cyan-100">เสียบ Drakside ลงกล่อง</Button></div><p className="mt-2 text-[9px] leading-4 text-cyan-100/35">กดแล้วแค่ใส่ในช่องพิมพ์ ยังไม่ส่งให้ลูกค้า</p></div>) : <div className="rounded-xl border border-cyan-300/10 bg-black/20 p-3 text-xs leading-5 text-cyan-100/45">ห้องนี้ยังไม่มี Tracking สำรอง</div>}</> : <div className="p-4 text-center text-xs text-cyan-100/40">เลือกห้องแชทก่อน</div>}</CardContent></Card>[m
+     </div>[m
+[31m-    {isMobile && mobileOpen ? <div className="fixed inset-0 z-50 flex items-end bg-[#03050b]/85 p-2 backdrop-blur-md"><div className="flex h-[94dvh] max-h-[94dvh] w-full min-h-0 flex-col overflow-hidden rounded-3xl border border-cyan-300/25 bg-[#0b101a]/95 shadow-[0_0_36px_rgba(34,211,238,.12),0_0_56px_rgba(168,85,247,.12)] backdrop-blur-xl">{conversation}</div></div> : null}[m
+[31m-    {summaryOpen ? <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"><div className="w-full max-w-2xl rounded-3xl border border-fuchsia-400/25 bg-[#15101d] p-5 shadow-2xl shadow-fuchsia-950/40"><div className="flex items-center justify-between"><div><p className="text-xs font-semibold uppercase tracking-[0.22em] text-fuchsia-300">ADMIN ORDER SUMMARY</p><h3 className="mt-2 text-xl font-semibold text-white">สร้างใบสรุปออเดอร์ในห้องนี้</h3></div><button onClick={() => setSummaryOpen(false)} className="rounded-xl p-2 text-fuchsia-100/50 hover:bg-fuchsia-500/10 hover:text-white"><X className="h-5 w-5" /></button></div><Textarea autoFocus value={summaryText} onChange={event => setSummaryText(event.target.value)} placeholder="วางข้อความลูกค้าที่นี่…" className="mt-4 min-h-48 border-fuchsia-500/20 bg-black/25 text-sm leading-6 text-white placeholder:text-fuchsia-100/25" />{summary ? <div className="mt-4 rounded-2xl border border-emerald-400/20 bg-emerald-400/[0.06] p-4"><div className="flex items-center justify-between gap-3"><p className="text-xs font-semibold uppercase tracking-wider text-emerald-300">PREVIEW · {summary.orderNumber}</p><span className="text-[10px] text-emerald-200/60">ยังไม่ส่ง</span></div><div className="mt-3 grid gap-2 text-sm sm:grid-cols-2"><div><span className="text-[10px] text-fuchsia-100/40">ชื่อลูกค้า</span><p className="text-white">{summary.customerName || "ไม่ระบุชื่อ"}</p></div><div><span className="text-[10px] text-fuchsia-100/40">เบอร์โทร</span><p className="text-white">{summary.phone || "ไม่ระบุเบอร์โทร"}</p></div><div className="sm:col-span-2"><span className="text-[10px] text-fuchsia-100/40">ที่อยู่</span><p className="text-fuchsia-100/80">{summary.address || "ไม่ระบุที่อยู่"}</p></div><div><span className="text-[10px] text-fuchsia-100/40">สินค้า</span><p className="text-fuchsia-200">{summary.product}</p></div><div><span className="text-[10px] text-fuchsia-100/40">COD</span><p className="text-cyan-200">{summary.cod === "ไม่ระบุ" ? summary.cod : `${summary.cod} บาท`}</p></div></div><div className="mt-3 border-t border-emerald-400/10 pt-3"><span className="text-[10px] text-fuchsia-100/40">ข้อความที่จะนำไปใส่ช่องตอบกลับ</span><pre className="mt-1 whitespace-pre-wrap text-xs leading-5 text-fuchsia-100/75">{summary.copyText}</pre></div>{summary.timingMs ? <p className="mt-3 border-t border-emerald-400/10 pt-2 text-[10px] text-emerald-200/55">วัดเวลา: รวม {summary.timingMs.total}ms · ดึงข้อมูล {summary.timingMs.dataLookup}ms · แปลงข้อความ {summary.timingMs.parse}ms · Audit {summary.timingMs.audit}ms</p> : null}</div> : null}<div className="mt-4 rounded-xl border border-fuchsia-400/10 bg-black/15 p-3"><p className="text-[10px] font-semibold uppercase tracking-wider text-fuchsia-100/40">ประวัติ Timing ล่าสุด</p>{summaryTimingsQuery.isLoading ? <p className="mt-2 text-[10px] text-fuchsia-100/35">กำลังโหลด…</p> : <div className="mt-2 space-y-1">{summaryTimingsQuery.data?.slice(0, 5).map(row => { const timing = (row.metadata as { timingMs?: { total?: number; dataLookup?: number; parse?: number; audit?: number } }).timingMs; return <p key={row.id} className="text-[10px] text-fuchsia-100/50">{row.orderNumber ?? "draft"} · รวม {timing?.total ?? "—"}ms · data {timing?.dataLookup ?? "—"}ms · parse {timing?.parse ?? "—"}ms</p>; })}</div>}</div><div className="mt-4 flex justify-end gap-2"><Button variant="outline" onClick={() => setSummaryOpen(false)} className="border-fuchsia-400/20 bg-transparent text-fuchsia-100/70">ยกเลิก</Button><Button disabled={!summaryText.trim() || generateSummary.isPending} onClick={() => generateSummary.mutate({ rawText: summaryText, pageId: selectedPageId || undefined, threadId: selectedThreadId || undefined })} className="bg-gradient-to-r from-fuchsia-600 via-violet-600 to-emerald-500">{generateSummary.isPending ? "กำลังอ่าน…" : "สรุปออเดอร์"}</Button></div></div></div> : null}[m
+     {orderDetailOpen ? <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"><div className="max-h-[85vh] w-full max-w-3xl overflow-y-auto rounded-3xl border border-cyan-400/25 bg-[#15101d] p-5 shadow-2xl"><div className="flex items-center justify-between"><div><p className="text-xs uppercase tracking-[0.2em] text-cyan-300">LINKED ORDERS</p><h3 className="mt-1 text-xl font-semibold text-white">ออเดอร์ของ {selected?.customerName || "ลูกค้ารายนี้"}</h3></div><button onClick={() => setOrderDetailOpen(false)} className="rounded-xl p-2 text-fuchsia-100/50 hover:bg-fuchsia-500/10 hover:text-white"><X className="h-5 w-5" /></button></div><p className="mt-3 rounded-xl border border-cyan-400/15 bg-cyan-400/[0.04] p-3 text-xs leading-5 text-cyan-100/75">ห้องนี้พบข้อความที่มีคำว่า COD {selected?.codSignalCount ?? 0} รายการ (ใช้ COD เป็นเกณฑ์เดียวในข้อความที่โหลดมา) · เชื่อมแถวออเดอร์ได้ {linkedOrders.length} ใบ</p>{threadsQuery.isLoading ? <div className="mt-8 flex items-center justify-center gap-2 text-sm text-fuchsia-100/50"><LoaderCircle className="h-4 w-4 animate-spin text-cyan-300" />กำลังค้นหาออเดอร์…</div> : linkedOrders.length ? <div className="mt-4 space-y-3">{linkedOrders.map((order: any) => <div key={order.order_number} className="rounded-2xl border border-cyan-400/15 bg-cyan-400/[0.05] p-4"><div className="flex flex-wrap items-center justify-between gap-2"><p className="font-semibold text-cyan-100">{order.order_number}</p><span className="text-xs text-fuchsia-100/50">COD {order.cod_amount ?? order.expected_cod ?? "—"} บาท</span></div><p className="mt-2 text-sm text-fuchsia-100/75">{order.customer_name || "ไม่ระบุชื่อ"} · {order.phone || "ไม่ระบุเบอร์"}</p><p className="mt-1 text-xs leading-5 text-fuchsia-100/50">{order.full_address || "ไม่ระบุที่อยู่"}</p><p className="mt-2 text-xs text-fuchsia-200/70">{order.lab_product_display_text || "ยังไม่มี master_display_for_packer ใน Lab 88"}</p></div>)}</div> : <p className="mt-5 rounded-2xl border border-fuchsia-500/10 bg-black/20 p-4 text-sm text-fuchsia-100/50">ยังไม่พบออเดอร์ที่เชื่อมกับห้องนี้</p>}{chatEvidenceQuery.isLoading ? <div className="mt-5 flex items-center gap-2 text-xs text-cyan-200/70"><LoaderCircle className="h-3.5 w-3.5 animate-spin" />กำลังโหลดหลักฐานแชท…</div> : <div className="mt-5 rounded-2xl border border-fuchsia-400/15 bg-fuchsia-400/[0.04] p-4"><div className="flex items-center justify-between"><p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-200">CHAT EVIDENCE</p><span className="text-[10px] text-cyan-100/50">{chatEvidenceQuery.data?.length ?? 0} รายการ</span></div><div className="mt-3 max-h-64 space-y-2 overflow-y-auto">{chatEvidenceQuery.data?.length ? chatEvidenceQuery.data.map(row => <div key={String(row.id)} className="rounded-xl border border-fuchsia-400/10 bg-black/20 p-2.5"><div className="flex justify-between gap-2 text-[10px] text-cyan-100/45"><span>{row.speaker_type === "page" ? "[เพจ]" : "[ลูกค้า]"} {String(row.customer_name ?? row.sender_name ?? "ลูกค้า")}</span><span>{timeLabel(String(row.occurred_at ?? row.source_created_at ?? ""))}</span></div><p className="mt-1 whitespace-pre-wrap text-xs leading-5 text-fuchsia-50/80">{String(row.message_text ?? "[ข้อความไม่มีตัวอักษร / มีไฟล์แนบ]")}</p><p className="mt-1 truncate text-[9px] text-cyan-100/30">source: {String(row.source_message_id ?? row.dedupe_key ?? "—")}</p></div>) : <p className="text-xs text-cyan-100/45">ยังไม่มีหลักฐานจากตารางแชทลูกค้าหรือเพจสำหรับห้องนี้</p>}</div></div>}</div></div> : null}[m
+     {lightboxUrl ? <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/90 p-4" onClick={() => setLightboxUrl(null)}><img src={lightboxUrl} alt="รูปภาพขนาดเต็ม" className="max-h-[92vh] max-w-[94vw] rounded-2xl object-contain shadow-2xl" /></div> : null}[m
+     <footer className="flex items-center gap-2 px-2 text-[11px] text-fuchsia-100/30"><MessageCircle className="h-3.5 w-3.5" />n8n API → Supabase ทุก 1 นาที · ห้องแชทอ่านจากตารางกลาง · ทุกการตอบกลับบันทึก Audit Log</footer>[m
+[1mdiff --git a/client/src/pages/OrderControl.tsx b/client/src/pages/OrderControl.tsx[m
+[1mindex 709ded7..9993e49 100644[m
+[1m--- a/client/src/pages/OrderControl.tsx[m
+[1m+++ b/client/src/pages/OrderControl.tsx[m
+[36m@@ -12,8 +12,7 @@[m [mimport { Button } from "@/components/ui/button";[m
+ import { Card, CardContent, CardHeader } from "@/components/ui/card";[m
+ import { Input } from "@/components/ui/input";[m
+ import { trpc } from "@/lib/trpc";[m
+[31m-import { getActiveCamp, readBbOrderEvidence, readBbOrderEvidenceBatch, readCanonicalOrders } from "@/lib/canonical";[m
+[31m-import { getOrderWarnings } from "@/lib/orderWarnings";[m
+[32m+[m[32mimport { currentBusinessDayStartKey, getActiveCamp, orderTimeSortKey, readBbOrderEvidence, readBbOrderEvidenceBatch, readCanonicalOrders } from "@/lib/canonical";[m
+ import {[m
+   AlertTriangle,[m
+   Check,[m
+[36m@@ -43,7 +42,6 @@[m [mimport { useQuery } from "@tanstack/react-query";[m
+ import { Link } from "wouter";[m
+ [m
+ const baht = new Intl.NumberFormat("th-TH");[m
+[31m-type GeneratedSummary = { orderNumber: string; customerName: string; phone: string; address: string; product: string; cod: string; copyText: string };[m
+ [m
+ function money(value: number | null | undefined) {[m
+   return value === null || value === undefined ? "—" : `${baht.format(value)} ฿`;[m
+[36m@@ -154,15 +152,7 @@[m [mfunction orderAddress(order: any) {[m
+ }[m
+ [m
+ function orderBillCopyText(order: any) {[m
+[31m-  const storedText = String(order?.telegram_copy_text ?? "").trim();[m
+[31m-  if (storedText) return storedText;[m
+[31m-  const items = Array.isArray(order?.items) && order.items.length[m
+[31m-    ? order.items.map((item: any) => itemDisplay(item)).join("\n")[m
+[31m-    : itemDisplay(order);[m
+[31m-  const cod = order?.cod_amount == null || order.cod_amount === "" ? "" : `${money(order.cod_amount)} บาท`;[m
+[31m-  return [order?.order_number, order?.order_time_display, cod, order?.facebook_name || order?.customer_name, order?.phone, orderAddress(order), items][m
+[31m-    .filter(Boolean)[m
+[31m-    .join("\n");[m
+[32m+[m[32m  return String(order?.telegram_copy_text ?? order?.telegram_message_web ?? order?.telegram_message ?? order?.telegram_actual_bill ?? "").trim();[m
+ }[m
+ [m
+ function orderDnaNodes(order: any, parcelRows: Array<Record<string, any>>, evidence: unknown) {[m
+[36m@@ -211,12 +201,6 @@[m [mexport default function OrderControl() {[m
+   const [pageFilter, setPageFilter] = useState("");[m
+   const [selectedNumber, setSelectedNumber] = useState<string | null>(null);[m
+   const [copied, setCopied] = useState(false);[m
+[31m-  const [draftText, setDraftText] = useState("");[m
+[31m-  const [draftCustomer, setDraftCustomer] = useState("");[m
+[31m-  const [draftProduct, setDraftProduct] = useState("");[m
+[31m-  const [draftCod, setDraftCod] = useState("");[m
+[31m-  const [showDraftSummary, setShowDraftSummary] = useState(false);[m
+[31m-  const [generatedSummary, setGeneratedSummary] = useState<GeneratedSummary | null>(null);[m
+   const [previewText, setPreviewText] = useState("");[m
+   const [flashBusinessCode, setFlashBusinessCode] = useState(() => localStorage.getItem("flash-business-code") || "");[m
+   const [flashSaved, setFlashSaved] = useState(false);[m
+[36m@@ -232,7 +216,7 @@[m [mexport default function OrderControl() {[m
+     refetchOnReconnect: false,[m
+   });[m
+   const parcelQueueQuery = trpc.parcels.mappingQueue.useQuery({ status: "all", limit: 500 }, { staleTime: 30_000, refetchInterval: 60_000 });[m
+[31m-  const orders = liveQuery.data?.orders ?? [];[m
+[32m+[m[32m  const orders = (liveQuery.data?.orders ?? []).filter((order: any) => orderTimeSortKey(order.order_time_display) >= currentBusinessDayStartKey());[m
+   const todayKey = bangkokTodayKey();[m
+   const stats = {[m
+     total: orders.length,[m
+[36m@@ -251,7 +235,6 @@[m [mexport default function OrderControl() {[m
+     }, 0),[m
+     sentToPacker: orders.filter(isSentFromTelegramRoom).length,[m
+   };[m
+[31m-  const summaryMutation = trpc.orders.generateSummary.useMutation({ onSuccess: setGeneratedSummary });[m
+ [m
+   useEffect(() => {[m
+     if (!selectedNumber && orders[0]) setSelectedNumber(orders[0].order_number);[m
+[36m@@ -278,7 +261,6 @@[m [mexport default function OrderControl() {[m
+     })[m
+     .sort((a, b) => orderDisplaySortKey(b.order_time_display) - orderDisplaySortKey(a.order_time_display)), [orders, searchNeedle, filter, dateFrom, dateTo, timeFrom, timeTo, pageFilter]);[m
+   const selectedOrder = orders.find(order => order.order_number === selectedNumber) ?? null;[m
+[31m-  const selectedOrderWarnings = selectedOrder ? getOrderWarnings(selectedOrder) : [];[m
+   const selectedParcelRows = useMemo(() => {[m
+     if (!selectedOrder) return [] as Array<Record<string, any>>;[m
+     const normalize = (value: unknown) => String(value ?? "").replace(/\D/g, "");[m
+[36m@@ -330,16 +312,7 @@[m [mexport default function OrderControl() {[m
+     setCopied(true);[m
+     window.setTimeout(() => setCopied(false), 1800);[m
+   };[m
+[31m-  const previewSummary = (order: any) => {[m
+[31m-    setPreviewText(orderBillCopyText(order));[m
+[31m-  };[m
+ [m
+[31m-  const copyGenerated = async () => {[m
+[31m-    if (!generatedSummary) return;[m
+[31m-    await navigator.clipboard?.writeText(generatedSummary.copyText);[m
+[31m-    setCopied(true);[m
+[31m-    window.setTimeout(() => setCopied(false), 1800);[m
+[31m-  };[m
+ [m
+   return <div className="order-control-nebula min-h-[calc(100vh-2rem)] text-white">[m
+     <div className="mx-auto max-w-[1680px] space-y-5 p-3 sm:p-5 lg:p-7">[m
+[36m@@ -356,10 +329,6 @@[m [mexport default function OrderControl() {[m
+ [m
+       <Card className={`hidden rounded-2xl border ${liveQuery.isError ? "border-red-500/30 bg-red-950/20" : liveQuery.isFetching ? "border-amber-400/30 bg-amber-950/10" : "border-emerald-500/25 bg-emerald-950/10"}`}><CardContent className="flex flex-wrap items-center justify-between gap-3 p-4"><div className="flex items-center gap-3"><div className={`h-3 w-3 rounded-full ${liveQuery.isError ? "bg-red-400" : liveQuery.isFetching ? "animate-pulse bg-amber-300" : "bg-emerald-400"}`} /><div><p className="text-sm font-semibold text-white">{liveQuery.isError ? "บันทึก/อ่านออเดอร์ไม่ครบ" : liveQuery.isFetching ? "กำลังตรวจสอบข้อมูลออเดอร์…" : "สถานะสายออเดอร์พร้อม"}</p></div></div><Badge className={liveQuery.isError ? "border-red-400/30 bg-red-400/10 text-red-300" : liveQuery.isFetching ? "border-amber-400/30 bg-amber-400/10 text-amber-200" : "border-emerald-400/30 bg-emerald-400/10 text-emerald-300"}>{liveQuery.isError ? "INCOMPLETE" : liveQuery.isFetching ? "CHECKING" : "LOADED"}</Badge></CardContent></Card>[m
+ [m
+[31m-      <div className="hidden flex items-center justify-between rounded-2xl border border-orange-500/20 bg-orange-500/[0.04] px-4 py-3"><div><p className="text-[10px] font-semibold uppercase tracking-[0.25em] text-orange-300">ADMIN ORDER SUMMARY</p><p className="mt-1 text-sm font-semibold text-white">สร้างใบสรุปออเดอร์จากข้อความลูกค้า</p></div><Button size="sm" variant="outline" onClick={() => setShowDraftSummary(value => !value)} className="border-orange-400/30 bg-orange-500/10 text-orange-100 hover:bg-orange-500/20">{showDraftSummary ? "ซ่อน" : "＋ เพิ่ม"}</Button></div>[m
+[31m-      {showDraftSummary && ([m
+[31m-      <Card className="overflow-hidden rounded-3xl border-orange-500/20 bg-[#111116] shadow-2xl shadow-orange-950/10"><CardContent className="p-5 sm:p-6"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.25em] text-orange-300"><Sparkles className="h-3.5 w-3.5" /> ADMIN ORDER SUMMARY</div><h2 className="mt-2 text-xl font-semibold text-white">วางที่อยู่ แล้วสร้างใบสรุปออเดอร์</h2><p className="mt-1 text-xs leading-5 text-slate-500">ระบบจะอ่านชื่อ เบอร์โทร ที่อยู่ สินค้า และ COD จากข้อความ แล้วสร้างเลข <span className="font-mono text-orange-300">ORD</span> ให้อัตโนมัติ โดยยังไม่เขียนลงฐานข้อมูลจริง</p></div><Badge variant="outline" className="w-fit border-orange-500/30 bg-orange-500/5 text-orange-200">DRAFT MODE</Badge></div><div className="mt-5 grid gap-3 lg:grid-cols-[1.4fr_0.6fr]"><textarea value={draftText} onChange={event => setDraftText(event.target.value)} placeholder={'ก๊อปข้อความลูกค้าหรือที่อยู่มาวางที่นี่…\nเช่น ชื่อ: สมชาย ใจดี\nโทร: 0812345678\nบ้านเลขที่…'} className="min-h-32 w-full resize-y rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-600 focus:border-orange-400/50 focus:ring-2 focus:ring-fuchsia-500/20" /><div className="grid content-start gap-3 sm:grid-cols-3 lg:grid-cols-1"><Input value={draftCustomer} onChange={event => setDraftCustomer(event.target.value)} placeholder="ชื่อลูกค้า (ถ้ามี)" className="border-white/10 bg-black/30 text-white placeholder:text-slate-600" /><Input value={draftProduct} onChange={event => setDraftProduct(event.target.value)} placeholder="สินค้า / SKU (ถ้ามี)" className="border-white/10 bg-black/30 text-white placeholder:text-slate-600" /><Input value={draftCod} onChange={event => setDraftCod(event.target.value)} placeholder="COD (ถ้ามี)" className="border-white/10 bg-black/30 text-white placeholder:text-slate-600" /></div></div><div className="mt-4 flex flex-wrap items-center justify-between gap-3"><span className="text-xs text-slate-600">{draftText.length.toLocaleString()} ตัวอักษร · แก้ไขข้อมูลได้ก่อนคัดลอก</span><Button disabled={!draftText.trim() || summaryMutation.isPending} onClick={() => summaryMutation.mutate({ rawText: draftText, customerName: draftCustomer, product: draftProduct, cod: draftCod })} className="rounded-xl bg-gradient-to-r from-orange-600 to-red-600 text-white shadow-lg shadow-orange-950/30 hover:from-orange-500 hover:to-red-500"><Sparkles className="mr-2 h-4 w-4" />{summaryMutation.isPending ? "กำลังสรุป…" : "สร้างใบสรุป ORD"}</Button></div>{generatedSummary && <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_0.8fr]"><div className="rounded-2xl border border-orange-400/30 bg-orange-500/[0.04] p-4"><div className="flex items-center justify-between gap-3"><p className="font-mono text-lg font-semibold text-orange-200">{generatedSummary.orderNumber}</p><Button size="sm" variant="outline" onClick={copyGenerated} className="border-orange-400/20 bg-orange-500/5 text-orange-200 hover:bg-orange-500/10">{copied ? <Check className="mr-2 h-3.5 w-3.5" /> : <Clipboard className="mr-2 h-3.5 w-3.5" />}{copied ? "คัดลอกแล้ว" : "คัดลอกใบสรุป"}</Button></div><div className="mt-4 grid gap-3 text-sm sm:grid-cols-2"><div><p className="text-[10px] uppercase tracking-wider text-slate-600">ลูกค้า</p><p className="mt-1 text-slate-200">{generatedSummary.customerName}</p></div><div><p className="text-[10px] uppercase tracking-wider text-slate-600">โทร</p><p className="mt-1 font-mono text-slate-300">{generatedSummary.phone || "ไม่ระบุ"}</p></div><div className="sm:col-span-2"><p className="text-[10px] uppercase tracking-wider text-slate-600">ที่อยู่</p><p className="mt-1 leading-6 text-slate-300">{generatedSummary.address || "ไม่ระบุที่อยู่"}</p></div><div><p className="text-[10px] uppercase tracking-wider text-slate-600">สินค้า</p><p className="mt-1 text-slate-200">{generatedSummary.product}</p></div><div><p className="text-[10px] uppercase tracking-wider text-slate-600">COD</p><p className="mt-1 text-orange-200">{generatedSummary.cod === "ไม่ระบุ" ? generatedSummary.cod : `${generatedSummary.cod} บาท`}</p></div></div></div><pre className="overflow-auto rounded-2xl border border-white/5 bg-black/40 p-4 font-mono text-xs leading-6 text-slate-400">{generatedSummary.copyText}</pre></div>}</CardContent></Card>[m
+[31m-      )}[m
+ [m
+       {liveQuery.isError ? <Card className="rounded-2xl border-red-500/30 bg-red-950/20"><CardContent className="flex items-start gap-3 p-5 text-sm text-red-200"><ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-red-400" /><div><p className="font-semibold">อ่านข้อมูลจริงไม่สำเร็จ</p><p className="mt-1 text-red-200/70">ตรวจสอบการเชื่อมต่อ Supabase และสิทธิ์อ่านข้อมูล</p><p className="mt-2 rounded-lg border border-red-300/10 bg-black/20 p-2 font-mono text-[11px] leading-5 text-red-100/80">{liveQuery.error.message}</p></div></CardContent></Card> : null}[m
+ [m
+[36m@@ -398,10 +367,6 @@[m [mexport default function OrderControl() {[m
+                 <div><p className="font-mono text-base font-semibold text-emerald-200">{directText(selectedOrder.order_number)}</p><p className="mt-1 text-xs text-slate-400">{directText(selectedOrder.customer_name)} · {directText(selectedOrder.phone)} · 📢 {directText(selectedOrder.page_name)}</p></div>[m
+                 <div className="flex items-center gap-2">{isSent(selectedOrder) && <span className="rounded-full border border-orange-300/30 bg-orange-400/10 px-3 py-1 text-xs font-semibold text-orange-200">🔥SENT</span>}<span className="inline-flex items-center gap-2 rounded-lg border border-cyan-400/30 bg-cyan-400/5 px-2 py-1 text-[11px] text-cyan-100"><Clock3 className="h-3.5 w-3.5" />{selectedOrder.order_time_display}</span></div>[m
+               </div>[m
+[31m-              {selectedOrderWarnings.length > 0 ? <section className="rounded-2xl border border-rose-300/45 bg-rose-950/20 p-3 sm:p-4" aria-live="polite">[m
+[31m-                <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-xs font-bold uppercase tracking-[.18em] text-rose-100">จังหวัดเสี่ยง / งดส่ง</h3><span className="text-[9px] text-slate-400">แสดงตามสัญญาณพื้นที่เท่านั้น</span></div>[m
+[31m-                <ul className="mt-2 space-y-1.5">{selectedOrderWarnings.map((warning) => <li key={warning.code} className="flex items-start gap-2 text-xs leading-5 text-rose-100"><span className="shrink-0 rounded border border-rose-200/40 px-1.5 py-0.5 text-[9px] font-bold">งดส่ง</span><span>{warning.message}</span></li>)}</ul>[m
+[31m-              </section> : null}[m
+               {/* SUMMARY + SOURCE · สรุปตรวจเร็วแยกจากก้อนออเดอร์แท้ */}[m
+               <div className="grid min-w-0 gap-3 2xl:grid-cols-[minmax(0,0.82fr)_minmax(0,1.18fr)]">[m
+                 <section className="order-summary-well min-w-0 rounded-2xl border border-cyan-300/20 bg-cyan-400/[0.025] p-3 sm:p-4">[m
+[36m@@ -443,7 +408,7 @@[m [mexport default function OrderControl() {[m
+ [m
+         <Card className="blackbox-queue overflow-hidden rounded-3xl"><CardContent className="p-0"><div className="blackbox-queue-head flex items-center justify-between border-b border-fuchsia-400/15 px-5 py-4"><div><p className="text-[10px] font-semibold uppercase tracking-[0.25em] text-fuchsia-300">INCOMING QUEUE · BLACKBOX SIGNALS</p><h2 className="mt-1 text-lg font-semibold text-white">รายการออเดอร์</h2></div><span className="neon-count">{liveQuery.isLoading ? "กำลังอ่านข้อมูล…" : `${visibleOrders.length} รายการ`}</span></div><div className="max-h-[650px] overflow-y-auto p-3">{liveQuery.isLoading ? <div className="flex items-center justify-center gap-2 p-12 text-sm text-fuchsia-100/45"><Loader2 className="h-4 w-4 animate-spin text-fuchsia-300" /> กำลังโหลดออเดอร์…</div> : visibleOrders.length === 0 ? <div className="p-12 text-center text-sm text-fuchsia-100/45"><Search className="mx-auto mb-3 h-7 w-7 text-fuchsia-300/35" />ไม่พบออเดอร์ตามเงื่อนไขนี้</div> : visibleOrders.map(order => { const status = statusFor(orderWithReview(order)); return <button key={order.order_number} onClick={() => setSelectedNumber(order.order_number)} className={`blackbox-order-card group mb-3 flex w-full items-center gap-3 rounded-2xl border p-4 text-left transition ${selectedNumber === order.order_number ? "is-selected" : ""}`}><div className={`status-beam ${status.label === "เช็คยอด" ? "status-beam-pink" : status.label === "ต้องตรวจ" ? "status-beam-violet" : "status-beam-cyan"}`} /><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><span className="font-mono text-xs font-semibold text-fuchsia-100/90">{order.order_number}</span><Badge variant="outline" className={`gap-1 px-2 py-0.5 text-[10px] ${status.tone}`}>{status.icon}{status.label}</Badge></div><div className="mt-3 grid gap-x-4 gap-y-1 text-xs sm:grid-cols-2"><p className="text-fuchsia-100/60"><span className="text-fuchsia-100/30">วันที่/เวลา:</span> {order.order_time_display || "ไม่ระบุเวลา"}</p><p className="truncate text-fuchsia-100/60"><span className="text-fuchsia-100/30">ชื่อเพจ:</span> {order.page_name || "ไม่ระบุเพจ"}</p><p className="text-fuchsia-100/80"><span className="text-fuchsia-100/30">ลูกค้า:</span> {order.customer_name || "ไม่ระบุชื่อลูกค้า"}</p><p className="font-mono text-fuchsia-100/70"><span className="font-sans text-fuchsia-100/30">เบอร์:</span> {order.phone || "ไม่ระบุเบอร์"}</p><p className="line-clamp-2 text-fuchsia-100/55 sm:col-span-2"><span className="text-fuchsia-100/30">ที่อยู่:</span> {orderAddress(order)}</p><p className="line-clamp-2 font-semibold text-cyan-200 sm:col-span-2"><span className="font-normal text-fuchsia-100/30">สินค้า:</span> {orderProductPreview(order)}</p><p className="text-fuchsia-100/60"><span className="text-fuchsia-100/30">จำนวน:</span> {orderProductQuantity(order)} คอต</p><p className="font-semibold text-pink-200"><span className="font-normal text-fuchsia-100/30">ยอด COD:</span> {money(order.cod_amount)}</p><p className="line-clamp-1 text-fuchsia-100/35 sm:col-span-2"><span className="text-fuchsia-100/30">ประวัติแชท:</span> คลิกออเดอร์เพื่อโหลดหลักฐาน</p></div></div></button>; })}</div></CardContent></Card>[m
+ [m
+[31m-        <Card className="order-inspector-nebula overflow-hidden rounded-3xl border-white/10 shadow-2xl shadow-black/20 xl:sticky xl:top-5 xl:self-start"><CardContent className="p-0">{selectedOrder ? <><div className="flex items-start justify-between border-b border-white/10 px-5 py-4"><div><p className="text-[10px] font-semibold uppercase tracking-[0.25em] text-orange-300">ORDER INSPECTOR</p><h2 className="mt-1 font-mono text-lg font-semibold">{selectedOrder.order_number}</h2></div><button onClick={() => setSelectedNumber(null)} className="rounded-lg p-2 text-slate-500 hover:bg-white/5 hover:text-white" aria-label="ปิดรายละเอียด"><X className="h-4 w-4" /></button></div><div className="space-y-5 p-5"><section className="order-dna-panel rounded-2xl border border-fuchsia-300/20 bg-fuchsia-400/[.04] p-4"><div className="flex items-center justify-between gap-2"><div><p className="text-[10px] font-semibold uppercase tracking-[.22em] text-fuchsia-200">ORDER DNA · DATA LINEAGE</p><p className="mt-1 text-[11px] text-fuchsia-100/45">เส้นทางข้อมูลของออเดอร์ใบนี้</p></div><span className="font-mono text-[10px] text-fuchsia-200/55">LIVE TRACE</span></div><div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3">{orderDnaNodes(selectedOrder, selectedParcelRows, selectedEvidenceQuery.data).map(node => <div key={node.key} className={`order-dna-node order-dna-${node.tone} ${node.ok ? "is-online" : "is-dark"}`}><div className="flex items-center gap-2"><span className="order-dna-lamp" /><span className="font-mono text-[10px] font-bold tracking-wider">{node.key}</span></div><p className="mt-2 text-[11px] leading-4">{node.ok ? `● ${node.label}` : "ไฟดับ · ไม่มีข้อมูล"}</p></div>)}</div><div className="mt-3 flex items-center gap-1 overflow-hidden">{orderDnaNodes(selectedOrder, selectedParcelRows, selectedEvidenceQuery.data).map((node, index, nodes) => <span key={`${node.key}-line`} className="flex min-w-0 flex-1 items-center">{index ? <span className={`h-px flex-1 ${node.ok ? "bg-fuchsia-300/35" : "bg-white/10"}`} /> : null}<span className={`mx-1 h-1.5 w-1.5 shrink-0 rounded-full ${node.ok ? "bg-fuchsia-300 shadow-[0_0_10px_rgba(255,110,216,.9)]" : "bg-slate-700"}`} />{index < nodes.length - 1 ? <span className="h-px flex-1 bg-fuchsia-300/20" /> : null}</span>)}</div></section><div className="flex items-start gap-3 rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4"><div className="rounded-full bg-emerald-400/10 p-2 text-emerald-300"><CheckCircle2 className="h-4 w-4" /></div><div><p className="text-sm font-semibold text-emerald-200">{statusFor(selectedOrderWithReview || selectedOrder).label}</p><p className="mt-1 text-xs leading-5 text-slate-400">{selectedOrder.audit_flags || selectedOrder.cod_check_status || "สถานะจากข้อมูลจริงในฐานข้อมูล"}</p></div></div><section><p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-500">PRODUCT PAYLOAD</p><div className="space-y-2">{(selectedOrder.items.length ? selectedOrder.items : [{ id: 0, sku: selectedOrder.sku, th_name: selectedOrder.th_name, emoji: selectedOrder.emoji, display_for_packer: selectedOrder.display_for_packer, quantity: selectedOrder.quantity ?? selectedOrder.qty ?? selectedOrder.extracted_qty ?? null, unit_price: selectedOrder.unit_price ?? selectedOrder.alien_unit_prices, expected_cod: selectedOrder.expected_cod }]).map((item, index) => <div key={`${item.id ?? "line"}-${index}`} className="rounded-2xl border border-white/5 bg-black/20 p-3"><div className="flex items-start gap-3"><span className="text-xl">{item.emoji ?? selectedOrder.emoji ?? "📦"}</span><div className="min-w-0 flex-1"><p className="font-mono text-xs font-semibold text-slate-200">{item.sku || "ไม่ระบุ SKU"}</p><p className="mt-1 text-xs text-slate-400">{itemDisplay(item)}</p></div></div><div className="mt-3 grid grid-cols-3 gap-2 text-xs"><div><p className="text-slate-600">จำนวน</p><p className="mt-1 text-slate-300">{item.quantity != null || item.qty != null ? `${item.quantity ?? item.qty} คอต` : "—"}</p></div><div><p className="text-slate-600">ราคาต่อหน่วย</p><p className="mt-1 text-orange-300">{money(item.unit_price)}</p></div><div><p className="text-slate-600">ยอด COD</p><p className="mt-1 text-orange-300">{money(selectedOrder.cod_amount)}</p></div></div></div>)}</div></section><section><p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-500">CUSTOMER CONTEXT</p><div className="space-y-2 rounded-2xl border border-white/5 bg-black/20 p-4 text-sm"><p className="font-semibold text-slate-100">{selectedOrder.customer_name || "ไม่ระบุชื่อ"}</p><p className="text-slate-400">{selectedOrder.phone || "ไม่ระบุเบอร์โทร"}</p><p className="leading-6 text-slate-400">{orderAddress(selectedOrder)}</p><div className="flex items-center gap-2 pt-2 text-xs text-slate-600"><Clock3 className="h-3.5 w-3.5" /> {selectedOrder.page_name || "ไม่ระบุเพจ"}</div></div></section><section><p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.22em] text-cyan-300">TRACKING BILL · สายพัสดุ</p>{selectedParcelRows.length ? <div className="space-y-3">{selectedParcelRows.map((row, index) => { const tracking = String(row.tracking_number ?? "").trim(); const drakside = String(row.drakside_tracking_message ?? row.tracking_message ?? row.tracking_copy_text ?? "").trim(); const facebook = String(row.facebook_tracking_message ?? row.facebook_message ?? "").trim(); const bill = String(row.telegram_tracking_message ?? row.manus_for_packer ?? row.telegram_copy_text ?? "").trim(); return <div key={`${tracking}-${index}`} className="rounded-2xl border border-cyan-300/20 bg-cyan-300/[.04] p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-[10px] uppercase tracking-wider text-cyan-200/55">เลขพัสดุ</p><p className="mt-1 font-mono text-lg font-bold text-cyan-100">{tracking || "ยังไม่มีเลข"}</p></div><Badge className="border-cyan-300/25 bg-cyan-300/10 text-cyan-200">{String(row.delivery_status ?? row.parcel_delivery_status ?? "รอส่ง")}</Badge></div>{bill ? <pre className="mt-3 max-h-32 overflow-auto whitespace-pre-wrap rounded-xl border border-white/5 bg-black/30 p-3 text-[11px] leading-5 text-amber-100/75">{bill}</pre> : null}<div className="mt-3 grid gap-2 sm:grid-cols-2">{drakside ? <div className="rounded-xl border border-fuchsia-300/15 bg-fuchsia-400/[.04] p-3"><p className="text-[10px] font-semibold uppercase tracking-wider text-fuchsia-200/70">DRAKSIDE TRACKING MESSAGE</p><p className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap text-[11px] leading-5 text-fuchsia-100/75">{drakside}</p></div> : null}{facebook ? <div className="rounded-xl border border-blue-300/15 bg-blue-400/[.04] p-3"><p className="text-[10px] font-semibold uppercase tracking-wider text-blue-200/70">FACEBOOK TRACKING MESSAGE</p><p className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap text-[11px] leading-5 text-blue-100/75">{facebook}</p></div> : null}</div></div>})}</div> : <p className="rounded-xl border border-white/5 bg-black/20 p-3 text-xs text-slate-500">ยังไม่พบเลขพัสดุที่จับคู่กับออเดอร์นี้</p>}</section><section><p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-500">CUSTOMER HISTORY · CHAT TIMELINE</p><pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded-2xl border border-orange-400/10 bg-black/30 p-4 text-xs leading-5 text-amber-100/70">{selectedEvidenceQuery.isLoading ? "กำลังโหลดประวัติแชท…" : selectedEvidenceQuery.isError ? "โหลดประวัติแชทไม่สำเร็จ" : customerHistoryText({ ...selectedOrder, ...selectedEvidenceQuery.data }) || "ไม่พบ chat_timeline"}</pre></section><div className="grid grid-cols-2 gap-2"><Button onClick={() => reviewOrder(selectedOrder, "PASSED")} variant="outline" className="border-emerald-400/25 bg-emerald-400/10 text-emerald-200"><CheckCircle2 className="mr-2 h-4 w-4" />ผ่าน</Button><Button onClick={() => reviewOrder(selectedOrder, "FAILED")} variant="outline" className="border-red-400/25 bg-red-400/10 text-red-200"><AlertTriangle className="mr-2 h-4 w-4" />ไม่ผ่าน</Button><Button onClick={() => previewSummary(selectedOrder)} variant="outline" className="border-orange-400/20 bg-orange-400/[0.06] text-amber-200 hover:bg-orange-400/10"><Eye className="mr-2 h-4 w-4" />พรีวิว</Button><Button onClick={copySummary} variant="outline" className="border-white/10 bg-white/5 text-slate-200 hover:bg-white/10 hover:text-white">{copied ? <Check className="mr-2 h-4 w-4 text-emerald-300" /> : <Clipboard className="mr-2 h-4 w-4" />}{copied ? "คัดลอกแล้ว" : "คัดลอกสรุป"}</Button><Button disabled className="bg-gradient-to-r from-orange-600 to-red-600 text-white opacity-70"><Send className="mr-2 h-4 w-4" /> ต่อ Atomic Claim</Button></div></div></> : <div className="flex min-h-[560px] flex-col items-center justify-center p-8 text-center text-slate-500"><Sparkles className="mb-4 h-8 w-8 text-orange-300/50" /><p className="text-sm">เลือกออเดอร์เพื่อดูรายละเอียด</p><p className="mt-1 text-xs text-slate-600">ข้อมูลจะแสดงจากตารางจริงเท่านั้น</p></div>}</CardContent></Card>[m
+[32m+[m[32m        <Card className="order-inspector-nebula overflow-hidden rounded-3xl border-white/10 shadow-2xl shadow-black/20 xl:sticky xl:top-5 xl:self-start"><CardContent className="p-0">{selectedOrder ? <><div className="flex items-start justify-between border-b border-white/10 px-5 py-4"><div><p className="text-[10px] font-semibold uppercase tracking-[0.25em] text-orange-300">ORDER INSPECTOR</p><h2 className="mt-1 font-mono text-lg font-semibold">{selectedOrder.order_number}</h2></div><button onClick={() => setSelectedNumber(null)} className="rounded-lg p-2 text-slate-500 hover:bg-white/5 hover:text-white" aria-label="ปิดรายละเอียด"><X className="h-4 w-4" /></button></div><div className="space-y-5 p-5"><section className="order-dna-panel rounded-2xl border border-fuchsia-300/20 bg-fuchsia-400/[.04] p-4"><div className="flex items-center justify-between gap-2"><div><p className="text-[10px] font-semibold uppercase tracking-[.22em] text-fuchsia-200">ORDER DNA · DATA LINEAGE</p><p className="mt-1 text-[11px] text-fuchsia-100/45">เส้นทางข้อมูลของออเดอร์ใบนี้</p></div><span className="font-mono text-[10px] text-fuchsia-200/55">LIVE TRACE</span></div><div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3">{orderDnaNodes(selectedOrder, selectedParcelRows, selectedEvidenceQuery.data).map(node => <div key={node.key} className={`order-dna-node order-dna-${node.tone} ${node.ok ? "is-online" : "is-dark"}`}><div className="flex items-center gap-2"><span className="order-dna-lamp" /><span className="font-mono text-[10px] font-bold tracking-wider">{node.key}</span></div><p className="mt-2 text-[11px] leading-4">{node.ok ? `● ${node.label}` : "ไฟดับ · ไม่มีข้อมูล"}</p></div>)}</div><div className="mt-3 flex items-center gap-1 overflow-hidden">{orderDnaNodes(selectedOrder, selectedParcelRows, selectedEvidenceQuery.data).map((node, index, nodes) => <span key={`${node.key}-line`} className="flex min-w-0 flex-1 items-center">{index ? <span className={`h-px flex-1 ${node.ok ? "bg-fuchsia-300/35" : "bg-white/10"}`} /> : null}<span className={`mx-1 h-1.5 w-1.5 shrink-0 rounded-full ${node.ok ? "bg-fuchsia-300 shadow-[0_0_10px_rgba(255,110,216,.9)]" : "bg-slate-700"}`} />{index < nodes.length - 1 ? <span className="h-px flex-1 bg-fuchsia-300/20" /> : null}</span>)}</div></section><div className="flex items-start gap-3 rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4"><div className="rounded-full bg-emerald-400/10 p-2 text-emerald-300"><CheckCircle2 className="h-4 w-4" /></div><div><p className="text-sm font-semibold text-emerald-200">{statusFor(selectedOrderWithReview || selectedOrder).label}</p><p className="mt-1 text-xs leading-5 text-slate-400">{selectedOrder.audit_flags || selectedOrder.cod_check_status || "สถานะจากข้อมูลจริงในฐานข้อมูล"}</p></div></div><section><p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-500">PRODUCT PAYLOAD</p><div className="space-y-2">{(selectedOrder.items.length ? selectedOrder.items : [{ id: 0, sku: selectedOrder.sku, th_name: selectedOrder.th_name, emoji: selectedOrder.emoji, display_for_packer: selectedOrder.display_for_packer, quantity: selectedOrder.quantity ?? selectedOrder.qty ?? selectedOrder.extracted_qty ?? null, unit_price: selectedOrder.unit_price ?? selectedOrder.alien_unit_prices, expected_cod: selectedOrder.expected_cod }]).map((item, index) => <div key={`${item.id ?? "line"}-${index}`} className="rounded-2xl border border-white/5 bg-black/20 p-3"><div className="flex items-start gap-3"><span className="text-xl">{item.emoji ?? selectedOrder.emoji ?? "📦"}</span><div className="min-w-0 flex-1"><p className="font-mono text-xs font-semibold text-slate-200">{item.sku || "ไม่ระบุ SKU"}</p><p className="mt-1 text-xs text-slate-400">{itemDisplay(item)}</p></div></div><div className="mt-3 grid grid-cols-3 gap-2 text-xs"><div><p className="text-slate-600">จำนวน</p><p className="mt-1 text-slate-300">{item.quantity != null || item.qty != null ? `${item.quantity ?? item.qty} คอต` : "—"}</p></div><div><p className="text-slate-600">ราคาต่อหน่วย</p><p className="mt-1 text-orange-300">{money(item.unit_price)}</p></div><div><p className="text-slate-600">ยอด COD</p><p className="mt-1 text-orange-300">{money(selectedOrder.cod_amount)}</p></div></div></div>)}</div></section><section><p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-500">CUSTOMER CONTEXT</p><div className="space-y-2 rounded-2xl border border-white/5 bg-black/20 p-4 text-sm"><p className="font-semibold text-slate-100">{selectedOrder.customer_name || "ไม่ระบุชื่อ"}</p><p className="text-slate-400">{selectedOrder.phone || "ไม่ระบุเบอร์โทร"}</p><p className="leading-6 text-slate-400">{orderAddress(selectedOrder)}</p><div className="flex items-center gap-2 pt-2 text-xs text-slate-600"><Clock3 className="h-3.5 w-3.5" /> {selectedOrder.page_name || "ไม่ระบุเพจ"}</div></div></section><section><p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.22em] text-cyan-300">TRACKING BILL · สายพัสดุ</p>{selectedParcelRows.length ? <div className="space-y-3">{selectedParcelRows.map((row, index) => { const tracking = String(row.tracking_number ?? "").trim(); const drakside = String(row.drakside_tracking_message ?? row.tracking_message ?? row.tracking_copy_text ?? "").trim(); const facebook = String(row.facebook_tracking_message ?? row.facebook_message ?? "").trim(); const bill = String(row.telegram_tracking_message ?? row.manus_for_packer ?? row.telegram_copy_text ?? "").trim(); return <div key={`${tracking}-${index}`} className="rounded-2xl border border-cyan-300/20 bg-cyan-300/[.04] p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-[10px] uppercase tracking-wider text-cyan-200/55">เลขพัสดุ</p><p className="mt-1 font-mono text-lg font-bold text-cyan-100">{tracking || "ยังไม่มีเลข"}</p></div><Badge className="border-cyan-300/25 bg-cyan-300/10 text-cyan-200">{String(row.delivery_status ?? row.parcel_delivery_status ?? "รอส่ง")}</Badge></div>{bill ? <pre className="mt-3 max-h-32 overflow-auto whitespace-pre-wrap rounded-xl border border-white/5 bg-black/30 p-3 text-[11px] leading-5 text-amber-100/75">{bill}</pre> : null}<div className="mt-3 grid gap-2 sm:grid-cols-2">{drakside ? <div className="rounded-xl border border-fuchsia-300/15 bg-fuchsia-400/[.04] p-3"><p className="text-[10px] font-semibold uppercase tracking-wider text-fuchsia-200/70">DRAKSIDE TRACKING MESSAGE</p><p className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap text-[11px] leading-5 text-fuchsia-100/75">{drakside}</p></div> : null}{facebook ? <div className="rounded-xl border border-blue-300/15 bg-blue-400/[.04] p-3"><p className="text-[10px] font-semibold uppercase tracking-wider text-blue-200/70">FACEBOOK TRACKING MESSAGE</p><p className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap text-[11px] leading-5 text-blue-100/75">{facebook}</p></div> : null}</div></div>})}</div> : <p className="rounded-xl border border-white/5 bg-black/20 p-3 text-xs text-slate-500">ยังไม่พบเลขพัสดุที่จับคู่กับออเดอร์นี้</p>}</section><section><p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-500">CUSTOMER HISTORY · CHAT TIMELINE</p><pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded-2xl border border-orange-400/10 bg-black/30 p-4 text-xs leading-5 text-amber-100/70">{selectedEvidenceQuery.isLoading ? "กำลังโหลดประวัติแชท…" : selectedEvidenceQuery.isError ? "โหลดประวัติแชทไม่สำเร็จ" : customerHistoryText({ ...selectedOrder, ...selectedEvidenceQuery.data }) || "ไม่พบ chat_timeline"}</pre></section><div className="grid grid-cols-2 gap-2"><Button onClick={() => reviewOrder(selectedOrder, "PASSED")} variant="outline" className="border-emerald-400/25 bg-emerald-400/10 text-emerald-200"><CheckCircle2 className="mr-2 h-4 w-4" />ผ่าน</Button><Button onClick={() => reviewOrder(selectedOrder, "FAILED")} variant="outline" className="border-red-400/25 bg-red-400/10 text-red-200"><AlertTriangle className="mr-2 h-4 w-4" />ไม่ผ่าน</Button><Button onClick={copySummary} variant="outline" className="border-white/10 bg-white/5 text-slate-200 hover:bg-white/10 hover:text-white">{copied ? <Check className="mr-2 h-4 w-4 text-emerald-300" /> : <Clipboard className="mr-2 h-4 w-4" />}{copied ? "คัดลอกแล้ว" : "คัดลอกสรุป"}</Button><Button disabled className="bg-gradient-to-r from-orange-600 to-red-600 text-white opacity-70"><Send className="mr-2 h-4 w-4" /> ต่อ Atomic Claim</Button></div></div></> : <div className="flex min-h-[560px] flex-col items-center justify-center p-8 text-center text-slate-500"><Sparkles className="mb-4 h-8 w-8 text-orange-300/50" /><p className="text-sm">เลือกออเดอร์เพื่อดูรายละเอียด</p><p className="mt-1 text-xs text-slate-600">ข้อมูลจะแสดงจากตารางจริงเท่านั้น</p></div>}</CardContent></Card>[m
+ [m
+       </div>[m
+ <footer className="flex justify-end gap-3 px-2 text-[11px] text-slate-600"><span>{liveQuery.data?.fetchedAt ? `ดึงข้อมูลล่าสุด ${timeLabel(liveQuery.data.fetchedAt)}` : "กำลังรอข้อมูล"}</span></footer>[m
+[1mdiff --git a/client/src/pages/OrderPerformance.tsx b/client/src/pages/OrderPerformance.tsx[m
+[1mdeleted file mode 100644[m
+[1mindex 1656fc7..0000000[m
+[1m--- a/client/src/pages/OrderPerformance.tsx[m
+[1m+++ /dev/null[m
+[36m@@ -1,37 +0,0 @@[m
+[31m-import { Badge } from "@/components/ui/badge";[m
+[31m-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";[m
+[31m-import { Button } from "@/components/ui/button";[m
+[31m-import { trpc } from "@/lib/trpc";[m
+[31m-import { Activity, BarChart3, Database, RefreshCw, Zap } from "lucide-react";[m
+[31m-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";[m
+[31m-[m
+[31m-function timing(row: { metadata: unknown }) {[m
+[31m-  const value = row.metadata && typeof row.metadata === "object" ? (row.metadata as { timingMs?: Record<string, unknown> }).timingMs : undefined;[m
+[31m-  return {[m
+[31m-    total: Number(value?.total ?? 0),[m
+[31m-    dataLookup: Number(value?.dataLookup ?? 0),[m
+[31m-    parse: Number(value?.parse ?? 0),[m
+[31m-    audit: Number(value?.audit ?? 0),[m
+[31m-  };[m
+[31m-}[m
+[31m-[m
+[31m-export default function OrderPerformance() {[m
+[31m-  const query = trpc.orders.summaryTimings.useQuery({ limit: 50 }, { refetchInterval: 60_000 });[m
+[31m-  const rows = query.data ?? [];[m
+[31m-  const chartData = rows.slice(0, 12).reverse().map((row, index) => {[m
+[31m-    const value = timing(row);[m
+[31m-    return { name: row.orderNumber || `#${index + 1}`, total: value.total, data: value.dataLookup, parse: value.parse };[m
+[31m-  });[m
+[31m-  const totals = rows.map(timing);[m
+[31m-  const avg = (key: "total" | "dataLookup" | "parse" | "audit") => totals.length ? Math.round(totals.reduce((sum, item) => sum + item[key], 0) / totals.length) : 0;[m
+[31m-  const max = (key: "total" | "dataLookup" | "parse" | "audit") => totals.length ? Math.max(...totals.map(item => item[key])) : 0;[m
+[31m-[m
+[31m-  return <div className="min-h-[calc(100vh-2rem)] space-y-5 bg-[#09070d] p-2 text-white sm:p-4 lg:p-6">[m
+[31m-    <header className="rounded-3xl border border-orange-500/20 bg-[#100c19] p-6 shadow-2xl shadow-orange-950/20">[m
+[31m-      <div className="flex flex-wrap items-start justify-between gap-4"><div><div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.25em] text-orange-300"><Activity className="h-4 w-4" /> NIGHTOPS · ORDER PERFORMANCE</div><h1 className="mt-3 text-3xl font-semibold">ห้องประสิทธิภาพการดูดออเดอร์</h1><p className="mt-2 max-w-2xl text-sm leading-6 text-orange-100/55">แยกจากห้องแชท เพื่อวิเคราะห์ Data Lookup, Parse และ Audit จากการสรุปออเดอร์จริง</p></div><Button variant="outline" onClick={() => query.refetch()} className="border-orange-400/20 bg-orange-400/5 text-orange-100"><RefreshCw className={`mr-2 h-4 w-4 ${query.isFetching ? "animate-spin" : ""}`} />รีเฟรช</Button></div>[m
+[31m-    </header>[m
+[31m-    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{([ ["เฉลี่ยรวม", avg("total"), "ms", Zap], ["เฉลี่ย Data Lookup", avg("dataLookup"), "ms", Database], ["สูงสุดรวม", max("total"), "ms", BarChart3], ["จำนวนครั้ง", rows.length, "ครั้ง", Activity] ] as const).map(([label, value, unit, Icon]) => <Card key={label} className="rounded-2xl border-orange-500/15 bg-[#100d15]"><CardContent className="flex items-center gap-3 p-4"><div className="rounded-xl bg-orange-500/10 p-2.5 text-orange-300"><Icon className="h-5 w-5" /></div><div><p className="text-2xl font-semibold text-white">{value.toLocaleString("th-TH")}<span className="ml-1 text-xs font-normal text-orange-100/40">{unit}</span></p><p className="text-xs text-orange-100/45">{label}</p></div></CardContent></Card>)}</div>[m
+[31m-    <Card className="rounded-3xl border-orange-500/15 bg-[#100d15]"><CardHeader><div className="flex items-center justify-between"><CardTitle className="text-base text-white">Timing ต่อรายการ</CardTitle><Badge className="border border-emerald-400/20 bg-emerald-400/10 text-emerald-300">ข้อมูลจริงจาก Audit Log</Badge></div></CardHeader><CardContent><div className="h-[320px] w-full">{query.isLoading ? <div className="flex h-full items-center justify-center text-sm text-orange-100/40">กำลังโหลด Timing…</div> : chartData.length ? <ResponsiveContainer width="100%" height="100%"><BarChart data={chartData} margin={{ top: 8, right: 12, left: 0, bottom: 55 }}><CartesianGrid strokeDasharray="3 3" stroke="rgba(196,181,253,0.12)" /><XAxis dataKey="name" tick={{ fill: "#c4b5fd", fontSize: 10 }} angle={-30} textAnchor="end" interval={0} /><YAxis tick={{ fill: "#c4b5fd", fontSize: 10 }} unit="ms" /><Tooltip contentStyle={{ background: "#181020", border: "1px solid rgba(216,180,254,.25)", borderRadius: 12, color: "#fff" }} /><Bar dataKey="data" name="Data Lookup" fill="#a855f7" radius={[4, 4, 0, 0]} /><Bar dataKey="parse" name="Parse" fill="#22d3ee" radius={[4, 4, 0, 0]} /><Bar dataKey="total" name="รวม" fill="#f472b6" radius={[4, 4, 0, 0]} /></BarChart></ResponsiveContainer> : <div className="flex h-full items-center justify-center text-sm text-orange-100/40">ยังไม่มีข้อมูลการสรุปออเดอร์</div>}</div></CardContent></Card>[m
+[31m-    <Card className="rounded-3xl border-orange-500/15 bg-[#100d15]"><CardHeader><CardTitle className="text-base text-white">รายการ Timing ล่าสุด</CardTitle></CardHeader><CardContent><div className="overflow-x-auto"><table className="w-full min-w-[720px] text-left text-xs"><thead className="border-b border-orange-500/10 text-orange-100/35"><tr><th className="p-3">เวลา</th><th className="p-3">Order</th><th className="p-3">Page / Thread</th><th className="p-3">รวม</th><th className="p-3">Lookup</th><th className="p-3">Parse</th><th className="p-3">Audit</th></tr></thead><tbody>{rows.map(row => { const value = timing(row); return <tr key={row.id} className="border-b border-orange-500/[0.06] text-orange-50/75"><td className="p-3 text-orange-100/45">{new Date(row.createdAt).toLocaleString("th-TH")}</td><td className="p-3 font-medium text-orange-200">{row.orderNumber || "draft"}</td><td className="max-w-56 truncate p-3 text-orange-100/45">{row.pageId || "—"} / {row.threadId || "—"}</td><td className="p-3 text-pink-200">{value.total}ms</td><td className="p-3 text-orange-200">{value.dataLookup}ms</td><td className="p-3 text-amber-200">{value.parse}ms</td><td className="p-3 text-amber-200">{value.audit}ms</td></tr>; })}</tbody></table></div></CardContent></Card>[m
+[31m-  </div>;[m
+[31m-}[m
+[1mdiff --git a/server/order-summary.test.ts b/server/order-summary.test.ts[m
+[1mdeleted file mode 100644[m
+[1mindex 30b8899..0000000[m
+[1m--- a/server/order-summary.test.ts[m
+[1m+++ /dev/null[m
+[36m@@ -1,74 +0,0 @@[m
+[31m-import { describe, expect, it } from "vitest";[m
+[31m-import { generateOrderSummary } from "./order-summary";[m
+[31m-[m
+[31m-describe("generateOrderSummary", () => {[m
+[31m-  it("creates an ORD number and extracts common Thai order fields", () => {[m
+[31m-    const result = generateOrderSummary({[m
+[31m-      rawText: "ชื่อ: สมชาย ใจดี\nโทร: 081-234-5678\nบ้านเลขที่ 99/1 หมู่ 2 ต.บางรัก อ.เมือง จ.นนทบุรี 11000\nสินค้า: MANGO_GREEN 2 คอต\nCOD: 1,250",[m
+[31m-    }, new Date("2026-09-04T02:22:58.000Z"));[m
+[31m-[m
+[31m-    expect(result.orderNumber).toBe("ORD-040926-092258");[m
+[31m-    expect(result.customerName).toBe("สมชาย ใจดี");[m
+[31m-    expect(result.phone).toBe("0812345678");[m
+[31m-    expect(result.address).toContain("99/1");[m
+[31m-    expect(result.product).toContain("MANGO_GREEN");[m
+[31m-    expect(result.cod).toBe("1,250");[m
+[31m-    expect(result.copyText).toContain("ORD-040926-092258");[m
+[31m-  });[m
+[31m-[m
+[31m-  it("allows admin overrides for ambiguous pasted content", () => {[m
+[31m-    const result = generateOrderSummary({[m
+[31m-      rawText: "ส่งที่ 12/4 ถนนสุขุมวิท กรุงเทพฯ 10110",[m
+[31m-      customerName: "ลูกค้าหน้าร้าน",[m
+[31m-      product: "SKU-RED 1 คอต",[m
+[31m-      cod: "450",[m
+[31m-    });[m
+[31m-[m
+[31m-    expect(result.customerName).toBe("ลูกค้าหน้าร้าน");[m
+[31m-    expect(result.product).toBe("SKU-RED 1 คอต");[m
+[31m-    expect(result.cod).toBe("450");[m
+[31m-    expect(result.copyText).toContain("450 บาท");[m
+[31m-  });[m
+[31m-[m
+[31m-  it("maps Thai product aliases to the standard label used by the mapping workflow", () => {[m
+[31m-    const result = generateOrderSummary({[m
+[31m-      rawText: "ชื่อ Hz บ้านเลขที่ 58 ถนนลงหาดบางแสน ต.แสนสุข อ.เมือง จ.ชลบุรี 20130 เบอร์ 0930002488✅ เซียร่าเขียว 1",[m
+[31m-    }, new Date("2026-09-04T08:32:14.000Z"));[m
+[31m-[m
+[31m-    expect(result.product).toBe("🟩 SEVIOS_GREEN(ซีวอสเขียว) 1 คอต");[m
+[31m-    expect(result.copyText).toContain("🟩 SEVIOS_GREEN(ซีวอสเขียว) 1 คอต");[m
+[31m-  });[m
+[31m-[m
+[31m-  it("parses a compact single-line COD order", () => {[m
+[31m-    const result = generateOrderSummary({[m
+[31m-      rawText: "COD 200 อมรยินดีพจน์ บ้านเลขที่355 ซอยเพชรเกษม112 แขวงหนองค้างพลู เขตหนองเเขม กรุงเทพ10160เบอร์0620090155✅ ซีวอสแดง 1",[m
+[31m-    }, new Date("2026-09-04T08:42:28.000Z"));[m
+[31m-[m
+[31m-    expect(result.customerName).toBe("อมรยินดีพจน์");[m
+[31m-    expect(result.phone).toBe("0620090155");[m
+[31m-    expect(result.address).toContain("บ้านเลขที่355");[m
+[31m-    expect(result.address).toContain("กรุงเทพ10160");[m
+[31m-    expect(result.product).toBe("🟥 SEVIOS_RED(ซีวอสแดง) 1 คอต");[m
+[31m-    expect(result.cod).toBe("200");[m
+[31m-  });[m
+[31m-[m
+[31m-  it("uses an active admin alias before the fallback dictionary", () => {[m
+[31m-    const result = generateOrderSummary({[m
+[31m-      rawText: "ชื่อ ทดสอบ 0812345678 สินค้า เขียวพิเศษ 2",[m
+[31m-      productAliases: [{ alias: "เขียวพิเศษ", canonicalLabel: "🟩 CUSTOM_GREEN(เขียวพิเศษ)", isActive: true }],[m
+[31m-    });[m
+[31m-[m
+[31m-    expect(result.product).toBe("🟩 CUSTOM_GREEN(เขียวพิเศษ) 2 คอต");[m
+[31m-  });[m
+[31m-[m
+[31m-  it("keeps multiple products and quantities as separate summary lines", () => {[m
+[31m-    const result = generateOrderSummary({[m
+[31m-      rawText: "ชื่อ: ลูกค้าหลายชิ้น\nโทร: 0812345678\nที่อยู่: 99/1 กรุงเทพฯ 10110\nสินค้า: MOND_GREEN 2 คอต, SEVIOS_RED 1 คอต\nCOD: 850",[m
+[31m-    });[m
+[31m-[m
+[31m-    expect(result.product).toContain("🟩 MOND_GREEN(มอนด์เขียว) 2 คอต");[m
+[31m-    expect(result.product).toContain("🟥 SEVIOS_RED(ซีวอสแดง) 1 คอต");[m
+[31m-    expect(result.product.split("\n")).toHaveLength(2);[m
+[31m-    expect(result.copyText).toContain("🟩 MOND_GREEN(มอนด์เขียว) 2 คอต\n🟥 SEVIOS_RED(ซีวอสแดง) 1 คอต");[m
+[31m-  });[m
+[31m-});[m
+[1mdiff --git a/server/order-summary.ts b/server/order-summary.ts[m
+[1mdeleted file mode 100644[m
+[1mindex 335a264..0000000[m
+[1m--- a/server/order-summary.ts[m
+[1m+++ /dev/null[m
+[36m@@ -1,90 +0,0 @@[m
+[31m-export type OrderSummaryInput = {[m
+[31m-  rawText: string;[m
+[31m-  customerName?: string;[m
+[31m-  product?: string;[m
+[31m-  cod?: string;[m
+[31m-  orderNumber?: string;[m
+[31m-  productAliases?: Array<{ alias: string; canonicalLabel: string; isActive?: boolean }>;[m
+[31m-};[m
+[31m-[m
+[31m-export type OrderSummary = {[m
+[31m-  orderNumber: string;[m
+[31m-  customerName: string;[m
+[31m-  phone: string;[m
+[31m-  address: string;[m
+[31m-  product: string;[m
+[31m-  cod: string;[m
+[31m-  copyText: string;[m
+[31m-  timingMs?: { total: number; parse: number; dataLookup: number; audit: number };[m
+[31m-};[m
+[31m-[m
+[31m-function clean(value: string | undefined) {[m
+[31m-  return String(value ?? "").replace(/[\t ]+/g, " ").trim();[m
+[31m-}[m
+[31m-[m
+[31m-function firstMatch(text: string, patterns: RegExp[]) {[m
+[31m-  for (const pattern of patterns) {[m
+[31m-    const match = text.match(pattern);[m
+[31m-    if (match?.[1]) return clean(match[1]);[m
+[31m-  }[m
+[31m-  return "";[m
+[31m-}[m
+[31m-[m
+[31m-function thaiOrderNumber(now = new Date()) {[m
+[31m-  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Bangkok", day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).formatToParts(now);[m
+[31m-  const get = (type: string) => parts.find(part => part.type === type)?.value ?? "00";[m
+[31m-  return `ORD-${get("day")}${get("month")}${get("year")}-${get("hour")}${get("minute")}${get("second")}`;[m
+[31m-}[m
+[31m-[m
+[31m-function parseAddress(lines: string[]) {[m
+[31m-  return lines.filter(line => {[m
+[31m-    if (!line) return false;[m
+[31m-    if (/^(ชื่อ|ลูกค้า|ผู้รับ|โทร|เบอร์|phone|tel|cod|ยอด|สินค้า|product|sku|order|เลขที่|หมายเหตุ)\s*[:：]/i.test(line)) return false;[m
+[31m-    if (/^0\d{8,9}$/.test(line.replace(/[ -]/g, ""))) return false;[m
+[31m-    return true;[m
+[31m-  }).join(" ").replace(/\s+/g, " ").trim();[m
+[31m-}[m
+[31m-[m
+[31m-const productAliases = [[m
+[31m-  { pattern: /(?:เซียร่า|ซีวอส|se[vw]ios)\s*เขียว|se[vw]ios[_ -]?green/i, label: "🟩 SEVIOS_GREEN(ซีวอสเขียว)" },[m
+[31m-  { pattern: /เซียร่า\s*แดง|ซีวอส\s*แดง|se[vw]ios[_ -]?red/i, label: "🟥 SEVIOS_RED(ซีวอสแดง)" },[m
+[31m-  { pattern: /มอนด์\s*เขียว|mond[_ -]?green/i, label: "🟩 MOND_GREEN(มอนด์เขียว)" },[m
+[31m-  { pattern: /มะม่วง/i, label: "🥭 OS_MANGO(มะม่วง)" },[m
+[31m-  { pattern: /เมนทอล|menthol/i, label: "🟦 MILANO_MENTHOL(มิลานเมนทอล)" },[m
+[31m-  { pattern: /วีส\s*เขียว|vess[_ -]?green/i, label: "🟩 VESS_GREEN(วีสเขียว)" },[m
+[31m-];[m
+[31m-[m
+[31m-function normalizeProduct(value: string, customAliases: OrderSummaryInput["productAliases"] = []) {[m
+[31m-  const quantity = value.match(/(\d+(?:\.\d+)?)\s*(?:คอค|คอต|คอตตอน|กล่อง|ชิ้น)?\s*$/i)?.[1];[m
+[31m-  const custom = customAliases.find(alias => alias.isActive !== false && value.toLowerCase().includes(alias.alias.toLowerCase()));[m
+[31m-  if (custom) return `${custom.canonicalLabel}${quantity ? ` ${quantity} คอต` : ""}`;[m
+[31m-  const match = productAliases.find(alias => alias.pattern.test(value));[m
+[31m-  if (!match) return value;[m
+[31m-  return `${match.label}${quantity ? ` ${quantity} คอต` : ""}`;[m
+[31m-}[m
+[31m-[m
+[31m-function normalizeProducts(value: string, customAliases: OrderSummaryInput["productAliases"] = []) {[m
+[31m-  const parts = value[m
+[31m-    .split(/\s*(?:\n|,|;|\|)\s*/)[m
+[31m-    .map(clean)[m
+[31m-    .filter(Boolean);[m
+[31m-  return (parts.length > 1 ? parts : [value]).map(part => normalizeProduct(part, customAliases)).join("\n");[m
+[31m-}[m
+[31m-[m
+[31m-export function generateOrderSummary(input: OrderSummaryInput, now = new Date()): OrderSummary {[m
+[31m-  const rawText = clean(input.rawText);[m
+[31m-  const lines = rawText.split(/\r?\n/).map(clean).filter(Boolean);[m
+[31m-  const phone = firstMatch(rawText, [/(0\d{8,9})/, /(?:โทร|เบอร์|phone|tel)\s*[:：]?\s*([0-9 -]{9,13})/i]).replace(/[ -]/g, "");[m
+[31m-  const inlineName = firstMatch(rawText, [/(?:COD|ยอด(?:รวม)?|ราคา)\s*[:：]?\s*[\d,]+(?:\.\d+)?\s+([ก-๙A-Za-z][^\d]*?)(?=\s*(?:บ้านเลขที่|ที่อยู่|ส่งที่))/i]);[m
+[31m-  const customerName = clean(input.customerName) || firstMatch(rawText, [/(?:ชื่อ|ลูกค้า|ผู้รับ|customer)\s*[:：-]\s*([^\n]+)/i]) || inlineName || lines.find(line => /[ก-๙]{2,}/.test(line) && !/(ตำบล|ต\.|อำเภอ|อ\.|จังหวัด|จ\.|ถนน|หมู่|แขวง|เขต|บ้านเลขที่)/.test(line) && !/\d{5}/.test(line)) || "ไม่ระบุชื่อ";[m
+[31m-  const cod = clean(input.cod) || firstMatch(rawText, [/(?:COD|เก็บปลายทาง|ยอด(?:รวม)?|ราคา)\s*[:：]?\s*([\d,]+(?:\.\d+)?)\s*(?:บาท|฿)?/i]) || "ไม่ระบุ";[m
+[31m-  const customAliasText = input.productAliases?.find(alias => alias.isActive !== false && rawText.toLowerCase().includes(alias.alias.toLowerCase()))?.alias;[m
+[31m-  const productLines = lines.filter(line => /(?:คอต|คอตตอน|กล่อง|ชิ้น|SKU|MOND|CAVALLO|MILANO|SEVIOS|MANGO|GREEN|RED|BLUE|PURPLE|เซียร่า|ซีวอส|มอนด์)/i.test(line));[m
+[31m-  const rawProduct = clean(input.product) || firstMatch(rawText, [/(?:สินค้า|product|sku)\s*[:：-]\s*([^\n]+)/i]) || (customAliasText ? rawText : "") || productLines.join(", ") || "ไม่ระบุสินค้า";[m
+[31m-  const product = normalizeProducts(rawProduct, input.productAliases);[m
+[31m-  const inlineAddress = firstMatch(rawText, [/((?:บ้านเลขที่|ที่อยู่|ส่งที่)\s*[^\n]*?)(?=\s*(?:เบอร์|โทร|มือถือ)\s*[:：]?\s*0|\s*0\d{8,9}\s*$)/i]);[m
+[31m-  const address = inlineAddress || parseAddress(lines.filter(line => line !== customerName && !line.replace(/[ -]/g, "").includes(phone)));[m
+[31m-  const orderNumber = clean(input.orderNumber) || thaiOrderNumber(now);[m
+[31m-  const copyText = [orderNumber, customerName, phone || "ไม่ระบุเบอร์โทร", address || "ไม่ระบุที่อยู่", product, cod === "ไม่ระบุ" ? cod : `${cod} บาท`].join("\n");[m
+[31m-  return { orderNumber, customerName, phone, address, product, cod, copyText };[m
+[31m-}[m
